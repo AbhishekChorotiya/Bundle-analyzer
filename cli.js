@@ -376,6 +376,13 @@ function parseArgs(args) {
     model: "kimi-latest",
   };
 
+  function requireValue(flag, i, args) {
+    if (!args[i + 1] || args[i + 1].startsWith("--")) {
+      console.error(`Error: ${flag} requires a value`);
+      process.exit(1);
+    }
+  }
+
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
 
@@ -383,23 +390,28 @@ function parseArgs(args) {
       // Branch mode
       case "--base":
       case "-b":
+        requireValue(arg, i, args);
         options.base = args[++i];
         break;
       case "--head":
+        requireValue(arg, i, args);
         options.head = args[++i];
         break;
 
       // File mode
       case "--base-stats":
+        requireValue(arg, i, args);
         options.baseStats = args[++i];
         break;
       case "--pr-stats":
+        requireValue(arg, i, args);
         options.prStats = args[++i];
         break;
 
       // Options
       case "--lines":
       case "-l":
+        requireValue(arg, i, args);
         options.lines = args[++i];
         break;
       case "--skip-ai":
@@ -407,9 +419,11 @@ function parseArgs(args) {
         break;
       case "--model":
       case "-m":
+        requireValue(arg, i, args);
         options.model = args[++i];
         break;
       case "--comment-file":
+        requireValue(arg, i, args);
         options.commentFile = args[++i];
         break;
       case "--json":
@@ -424,6 +438,7 @@ function parseArgs(args) {
         options.postComment = true;
         break;
       case "--pr":
+        requireValue(arg, i, args);
         options.prNumber = args[++i];
         break;
       case "--verbose":
