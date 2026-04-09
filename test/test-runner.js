@@ -76,7 +76,7 @@ test('extractPackageName extracts package name', () => {
 });
 
 test('formatBytes formats correctly', () => {
-  assertEqual(formatBytes(0), '0 Bytes', 'Zero bytes');
+  assertEqual(formatBytes(0), '0 B', 'Zero bytes');
   assertEqual(formatBytes(1024), '1 KB', '1 kilobyte');
   assertEqual(formatBytes(1024 * 1024), '1 MB', '1 megabyte');
   assertTrue(formatBytes(1536).includes('1.5'), '1.5 KB');

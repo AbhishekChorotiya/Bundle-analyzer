@@ -5,6 +5,7 @@
  */
 
 const fs = require('fs');
+const { formatBytes } = require('../lib/utils');
 
 /**
  * Generate PR comment markdown
@@ -13,11 +14,31 @@ const fs = require('fs');
  * @returns {string} Markdown comment
  */
 function generateComment(analysis, options = {}) {
-  // Handle both raw analysis object and JSON serialized format
-  const summary = analysis.summary || analysis.diff || {};
+  // Handle both raw analysis object (from cli.js) and JSON serialized format (from analyze.js --json).
+  // When called from cli.js, analysis.summary is the generateSummary() result which lacks size fields;
+  // the size fields live on analysis.diff. When called with JSON, analysis.summary has everything.
+  const diff = analysis.diff || {};
+  const summary = {
+    ...(analysis.summary || {}),
+    // Prefer summary fields, fall back to diff fields for size data
+    baseSize: analysis.summary?.baseSize ?? diff.baseSize ?? 0,
+    prSize: analysis.summary?.prSize ?? diff.prSize ?? 0,
+    totalDiff: analysis.summary?.totalDiff ?? diff.totalDiff ?? 0,
+    baseSizeFormatted: analysis.summary?.baseSizeFormatted ?? diff.baseSizeFormatted,
+    prSizeFormatted: analysis.summary?.prSizeFormatted ?? diff.prSizeFormatted,
+    totalDiffFormatted: analysis.summary?.totalDiffFormatted ?? diff.totalDiffFormatted,
+    nodeModulesDiff: analysis.summary?.nodeModulesDiff ?? diff.nodeModulesDiff ?? 0,
+  };
   const ai = analysis.aiAnalysis || analysis.ai || {};
   const detections = analysis.issues || analysis.detections || { violations: [], critical: [], warnings: [], info: [] };
-  const changes = analysis.changes || {};
+  // When called from cli.js, changes are on analysis.diff (topChanges, packageDiffs).
+  // When called with JSON, they're on analysis.changes (top, packages).
+  const changes = analysis.changes || {
+    top: diff.topChanges || [],
+    packages: diff.packageDiffs
+      ? Object.entries(diff.packageDiffs).map(([name, change]) => ({ name, change }))
+      : [],
+  };
 
   const lines = [];
 
@@ -26,10 +47,10 @@ function generateComment(analysis, options = {}) {
   lines.push('');
 
   // Summary table
-  const baseSizeFormatted = summary.baseSizeFormatted || formatAbsoluteBytes(summary.baseSize || 0);
-  const prSizeFormatted = summary.prSizeFormatted || formatAbsoluteBytes(summary.prSize || 0);
+  const baseSizeFormatted = summary.baseSizeFormatted || formatBytes(summary.baseSize || 0);
+  const prSizeFormatted = summary.prSizeFormatted || formatBytes(summary.prSize || 0);
   const totalDiff = summary.totalDiff || (summary.prSize || 0) - (summary.baseSize || 0);
-  const totalDiffFormatted = summary.totalDiffFormatted || formatBytes(totalDiff);
+  const totalDiffFormatted = summary.totalDiffFormatted || formatBytes(totalDiff, { signed: true });
   const nodeModulesDiff = summary.nodeModulesDiff || 0;
 
   lines.push('| Metric | Value |');
@@ -37,8 +58,74 @@ function generateComment(analysis, options = {}) {
   lines.push(`| Base Size | ${baseSizeFormatted} |`);
   lines.push(`| PR Size | ${prSizeFormatted} |`);
   lines.push(`| Change | ${renderSizeChange(totalDiff, totalDiffFormatted)} |`);
-  lines.push(`| node_modules | ${renderSizeChange(nodeModulesDiff, formatBytes(nodeModulesDiff))} |`);
+  lines.push(`| node_modules | ${renderSizeChange(nodeModulesDiff, formatBytes(nodeModulesDiff, { signed: true }))} |`);
   lines.push('');
+
+  // Asset comparison table (output files)
+  const assetDiff = diff.assetDiff || [];
+  const significantAssets = assetDiff.filter(a => a.type !== 'unchanged');
+
+  if (significantAssets.length > 0) {
+    lines.push('### 📁 Output Files');
+    lines.push('');
+    lines.push('| Output File | Base | PR | Change | Top Contributors |');
+    lines.push('|-------------|------|-----|--------|-----------------|');
+
+    for (const asset of significantAssets) {
+      const baseSizeStr = asset.baseSize > 0 ? formatBytes(asset.baseSize) : '-';
+      const prSizeStr = asset.prSize > 0 ? formatBytes(asset.prSize) : '-';
+      let changeStr;
+      if (asset.type === 'added') {
+        changeStr = '🆕 new';
+      } else if (asset.type === 'removed') {
+        changeStr = '🗑️ removed';
+      } else {
+        changeStr = renderSizeChange(asset.change, formatBytes(asset.change, { signed: true }));
+      }
+      const reasonsStr = formatAssetReasons(asset);
+      lines.push(`| \`${truncate(asset.name, 40)}\` | ${baseSizeStr} | ${prSizeStr} | ${changeStr} | ${reasonsStr} |`);
+    }
+
+    // Show total asset size summary
+    const baseAssetSize = diff.baseAssetSize || 0;
+    const prAssetSize = diff.prAssetSize || 0;
+    const totalAssetDiff = diff.totalAssetDiff || (prAssetSize - baseAssetSize);
+    if (baseAssetSize > 0 || prAssetSize > 0) {
+      lines.push(`| **Total** | **${formatBytes(baseAssetSize)}** | **${formatBytes(prAssetSize)}** | **${renderSizeChange(totalAssetDiff, formatBytes(totalAssetDiff, { signed: true }))}** | |`);
+    }
+
+    lines.push('');
+  }
+
+  // Entrypoint comparison
+  const entrypointDiff = diff.entrypointDiff || [];
+  const significantEntrypoints = entrypointDiff.filter(e => e.type !== 'unchanged');
+
+  if (significantEntrypoints.length > 0) {
+    lines.push('<details>');
+    lines.push('<summary><b>🚪 Entrypoint Changes</b></summary>');
+    lines.push('');
+    lines.push('| Entrypoint | Base | PR | Change |');
+    lines.push('|------------|------|-----|--------|');
+
+    for (const ep of significantEntrypoints) {
+      const baseSizeStr = ep.baseSize > 0 ? formatBytes(ep.baseSize) : '-';
+      const prSizeStr = ep.prSize > 0 ? formatBytes(ep.prSize) : '-';
+      let changeStr;
+      if (ep.type === 'added') {
+        changeStr = '🆕 new';
+      } else if (ep.type === 'removed') {
+        changeStr = '🗑️ removed';
+      } else {
+        changeStr = renderSizeChange(ep.change, formatBytes(ep.change, { signed: true }));
+      }
+      lines.push(`| \`${ep.name}\` | ${baseSizeStr} | ${prSizeStr} | ${changeStr} |`);
+    }
+
+    lines.push('');
+    lines.push('</details>');
+    lines.push('');
+  }
 
   // AI Verdict
   lines.push('### 🤖 AI Verdict');
@@ -102,26 +189,6 @@ function generateComment(analysis, options = {}) {
     }
   }
 
-  // Top Changes
-  const topChanges = changes.top || [];
-  if (topChanges.length > 0) {
-    lines.push('<details>');
-    lines.push(`<summary><b>📈 Top ${Math.min(10, topChanges.length)} Changes</b></summary>`);
-    lines.push('');
-    lines.push('| Module | Change | Type |');
-    lines.push('|--------|--------|------|');
-
-    for (const change of topChanges.slice(0, 10)) {
-      const emoji = change.type === 'added' ? '🆕' : change.type === 'removed' ? '🗑️' : '📝';
-      const changeFormatted = change.changeFormatted || formatBytes(change.change);
-      lines.push(`| \`${truncate(change.name, 40)}\` | ${changeFormatted} | ${emoji} ${change.type} |`);
-    }
-
-    lines.push('');
-    lines.push('</details>');
-    lines.push('');
-  }
-
   // Package Changes
   const packages = changes.packages || [];
   const pkgChanges = packages
@@ -136,7 +203,7 @@ function generateComment(analysis, options = {}) {
     lines.push('|---------|--------|');
 
     for (const pkg of pkgChanges) {
-      const formatted = formatBytes(pkg.change);
+      const formatted = formatBytes(pkg.change, { signed: true });
       const icon = pkg.change > 0 ? '📈' : '📉';
       lines.push(`| ${pkg.name} | ${icon} ${formatted} |`);
     }
@@ -159,14 +226,22 @@ function generateComment(analysis, options = {}) {
  * @returns {string}
  */
 function generateCompactComment(analysis) {
-  const summary = analysis.summary || analysis.diff || {};
+  const diff = analysis.diff || {};
+  const summary = {
+    ...(analysis.summary || {}),
+    baseSize: analysis.summary?.baseSize ?? diff.baseSize ?? 0,
+    prSize: analysis.summary?.prSize ?? diff.prSize ?? 0,
+    totalDiff: analysis.summary?.totalDiff ?? diff.totalDiff ?? 0,
+    totalDiffFormatted: analysis.summary?.totalDiffFormatted ?? diff.totalDiffFormatted,
+    nodeModulesDiff: analysis.summary?.nodeModulesDiff ?? diff.nodeModulesDiff ?? 0,
+  };
   const ai = analysis.aiAnalysis || analysis.ai || {};
   const detections = analysis.issues || analysis.detections || {};
 
   const lines = [];
 
   const totalDiff = summary.totalDiff || (summary.prSize || 0) - (summary.baseSize || 0);
-  const totalDiffFormatted = summary.totalDiffFormatted || formatBytes(totalDiff);
+  const totalDiffFormatted = summary.totalDiffFormatted || formatBytes(totalDiff, { signed: true });
 
   lines.push('## 📦 Bundle Analysis');
   lines.push('');
@@ -344,35 +419,6 @@ function renderSizeChange(bytes, formatted) {
 }
 
 /**
- * Format bytes as a diff value (with +/- sign)
- * @param {number} bytes
- * @returns {string}
- */
-function formatBytes(bytes) {
-  if (bytes === 0) return '0 B';
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB'];
-  const i = Math.floor(Math.log(Math.abs(bytes)) / Math.log(k));
-  const value = parseFloat((Math.abs(bytes) / Math.pow(k, i)).toFixed(2));
-  const sign = bytes >= 0 ? '+' : '-';
-  return `${sign}${value} ${sizes[i]}`;
-}
-
-/**
- * Format bytes as an absolute value (no sign)
- * @param {number} bytes
- * @returns {string}
- */
-function formatAbsoluteBytes(bytes) {
-  if (bytes === 0) return '0 B';
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB'];
-  const i = Math.floor(Math.log(Math.abs(bytes)) / Math.log(k));
-  const value = parseFloat((Math.abs(bytes) / Math.pow(k, i)).toFixed(2));
-  return `${value} ${sizes[i]}`;
-}
-
-/**
  * Truncate string with ellipsis
  * @param {string} str
  * @param {number} maxLen
@@ -381,6 +427,24 @@ function formatAbsoluteBytes(bytes) {
 function truncate(str, maxLen) {
   if (str.length <= maxLen) return str;
   return str.substring(0, maxLen - 3) + '...';
+}
+
+/**
+ * Format asset reasons (top contributors) for display in a table cell.
+ * Returns a concise string like "lodash (+684 KB), App.js (+512 B)"
+ * @param {Object} asset - AssetChange with reasons
+ * @returns {string}
+ */
+function formatAssetReasons(asset) {
+  if (asset.type === 'added') return '*(new asset)*';
+  if (asset.type === 'removed') return '*(removed)*';
+
+  const reasons = asset.reasons || [];
+  if (reasons.length === 0) return '-';
+
+  return reasons
+    .map(r => `\`${truncate(r.name, 25)}\` (${r.changeFormatted})`)
+    .join(', ');
 }
 
 /**

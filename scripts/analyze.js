@@ -6,6 +6,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { formatBytes } = require('../lib/utils');
 
 // Load .env file from bundle-ai directory (no external dependency needed)
 const envPath = path.join(__dirname, '..', '.env');
@@ -121,7 +122,7 @@ function generateAnalysisReport(diff, detections, aiResult, context) {
     lines.push(`Percentage:        ${sign}${percent}%`);
   }
 
-  lines.push(`node_modules:      ${diff.nodeModulesDiff >= 0 ? '+' : ''}${formatBytes(diff.nodeModulesDiff)}`);
+  lines.push(`node_modules:      ${diff.nodeModulesDiff >= 0 ? '+' : ''}${formatBytes(diff.nodeModulesDiff, { signed: true })}`);
 
   if (context.linesChanged) {
     lines.push(`Lines Changed:     ${context.linesChanged}`);
@@ -205,6 +206,77 @@ function generateAnalysisReport(diff, detections, aiResult, context) {
     }
   }
 
+  // Output Files (Assets)
+  const assetDiff = diff.assetDiff || [];
+  const changedAssets = assetDiff.filter(a => a.type !== 'unchanged');
+
+  if (changedAssets.length > 0) {
+    lines.push('📁 OUTPUT FILES (Post-Minification)');
+    lines.push('─'.repeat(60));
+
+    if (diff.baseAssetSize || diff.prAssetSize) {
+      lines.push(`Base Total:  ${diff.baseAssetSizeFormatted}`);
+      lines.push(`PR Total:    ${diff.prAssetSizeFormatted}`);
+      lines.push(`Change:      ${formatBytes(diff.totalAssetDiff, { signed: true })}`);
+      lines.push('');
+    }
+
+    for (const asset of changedAssets.slice(0, 20)) {
+      const label =
+        asset.type === 'added' ? '[NEW]' :
+        asset.type === 'removed' ? '[REMOVED]' : '';
+      const baseStr = asset.type === 'added' ? '—' : formatBytes(asset.baseSize);
+      const prStr = asset.type === 'removed' ? '—' : formatBytes(asset.prSize);
+      const changeStr =
+        asset.type === 'added' ? `+${formatBytes(asset.prSize)}` :
+        asset.type === 'removed' ? `-${formatBytes(asset.baseSize)}` :
+        formatBytes(asset.change, { signed: true });
+
+      lines.push(`  ${label ? label + ' ' : ''}${asset.name}`);
+      lines.push(`    ${baseStr} → ${prStr}  (${changeStr})`);
+
+      // Show top contributors (module-level reasons for the size change)
+      const reasons = asset.reasons || [];
+      if (reasons.length > 0 && asset.type === 'changed') {
+        const reasonStr = reasons.map(r => `${r.name} (${r.changeFormatted})`).join(', ');
+        lines.push(`    Contributors: ${reasonStr}`);
+      }
+    }
+
+    if (changedAssets.length > 20) {
+      lines.push(`  ... and ${changedAssets.length - 20} more`);
+    }
+    lines.push('');
+  }
+
+  // Entrypoint Changes
+  const entrypointDiff = diff.entrypointDiff || [];
+  const changedEntrypoints = entrypointDiff.filter(e => e.type !== 'unchanged');
+
+  if (changedEntrypoints.length > 0) {
+    lines.push('🚪 ENTRYPOINT CHANGES');
+    lines.push('─'.repeat(60));
+
+    for (const ep of changedEntrypoints) {
+      const label =
+        ep.type === 'added' ? '[NEW]' :
+        ep.type === 'removed' ? '[REMOVED]' : '';
+      const baseStr = ep.type === 'added' ? '—' : formatBytes(ep.baseSize);
+      const prStr = ep.type === 'removed' ? '—' : formatBytes(ep.prSize);
+      const changeStr =
+        ep.type === 'added' ? `+${formatBytes(ep.prSize)}` :
+        ep.type === 'removed' ? `-${formatBytes(ep.baseSize)}` :
+        formatBytes(ep.change, { signed: true });
+
+      lines.push(`  ${label ? label + ' ' : ''}${ep.name}`);
+      lines.push(`    ${baseStr} → ${prStr}  (${changeStr})`);
+      if (ep.prAssets && ep.prAssets.length > 0) {
+        lines.push(`    Assets: ${ep.prAssets.join(', ')}`);
+      }
+    }
+    lines.push('');
+  }
+
   // Package Changes
   const pkgChanges = Object.entries(diff.packageDiffs)
     .filter(([, change]) => Math.abs(change) > 1024)
@@ -216,7 +288,7 @@ function generateAnalysisReport(diff, detections, aiResult, context) {
 
     for (const [pkg, change] of pkgChanges) {
       const sign = change > 0 ? '+' : '';
-      lines.push(`  ${sign}${formatBytes(change).padStart(10)}  ${pkg}`);
+      lines.push(`  ${sign}${formatBytes(change, { signed: true }).padStart(10)}  ${pkg}`);
     }
     lines.push('');
   }
@@ -277,7 +349,39 @@ function generateJSONOutput(analysis) {
       packages: Object.entries(diff.packageDiffs).map(([name, change]) => ({
         name,
         change,
-        changeFormatted: formatBytes(change),
+        changeFormatted: formatBytes(change, { signed: true }),
+      })),
+    },
+    assets: {
+      baseTotal: diff.baseAssetSize || 0,
+      prTotal: diff.prAssetSize || 0,
+      totalDiff: diff.totalAssetDiff || 0,
+      baseTotalFormatted: diff.baseAssetSizeFormatted || '0 B',
+      prTotalFormatted: diff.prAssetSizeFormatted || '0 B',
+      totalDiffFormatted: formatBytes(diff.totalAssetDiff || 0, { signed: true }),
+      changes: (diff.assetDiff || []).filter(a => a.type !== 'unchanged').map(a => ({
+        name: a.name,
+        type: a.type,
+        baseSize: a.baseSize,
+        prSize: a.prSize,
+        change: a.change,
+        reasons: (a.reasons || []).map(r => ({
+          name: r.name,
+          change: r.change,
+          changeFormatted: r.changeFormatted,
+          type: r.type,
+        })),
+      })),
+    },
+    entrypoints: {
+      changes: (diff.entrypointDiff || []).filter(e => e.type !== 'unchanged').map(e => ({
+        name: e.name,
+        type: e.type,
+        baseSize: e.baseSize,
+        prSize: e.prSize,
+        change: e.change,
+        baseAssets: e.baseAssets || [],
+        prAssets: e.prAssets || [],
       })),
     },
   };
@@ -294,19 +398,6 @@ function formatImportChain(chain) {
   // Take last 3 entries for brevity
   const relevant = chain.slice(-3);
   return relevant.join(' ← ');
-}
-
-/**
- * Format bytes as a diff value (with +/- sign for diffs)
- * @param {number} bytes
- * @returns {string}
- */
-function formatBytes(bytes) {
-  if (bytes === 0) return '0 B';
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB'];
-  const i = Math.floor(Math.log(Math.abs(bytes)) / Math.log(k));
-  return (bytes >= 0 ? '+' : '-') + parseFloat((Math.abs(bytes) / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
 
 /**

@@ -6,6 +6,7 @@
 
 const { computeDiff, generateSummary } = require('../lib/diff-engine');
 const { loadStatsFromFile } = require('../lib/stats-parser');
+const { formatBytes } = require('../lib/utils');
 
 /**
  * Run diff between two stats files
@@ -60,8 +61,71 @@ function generateReport(diff, summary, options = {}) {
   lines.push(`Base Size:  ${diff.baseSizeFormatted}`);
   lines.push(`PR Size:    ${diff.prSizeFormatted}`);
   lines.push(`Change:     ${diff.totalDiffFormatted}`);
-  lines.push(`node_modules: ${diff.nodeModulesDiff >= 0 ? '+' : ''}${formatBytes(diff.nodeModulesDiff)}`);
+  lines.push(`node_modules: ${diff.nodeModulesDiff >= 0 ? '+' : ''}${formatBytes(diff.nodeModulesDiff, { signed: true })}`);
   lines.push('');
+
+  // Asset changes (output files)
+  const assetDiff = diff.assetDiff || [];
+  const significantAssets = assetDiff.filter(a => a.type !== 'unchanged');
+
+  if (significantAssets.length > 0) {
+    lines.push('## Output Files');
+    lines.push('');
+
+    for (const asset of significantAssets) {
+      const baseSizeStr = asset.baseSize > 0 ? formatBytes(asset.baseSize, { signed: false }) : '-';
+      const prSizeStr = asset.prSize > 0 ? formatBytes(asset.prSize, { signed: false }) : '-';
+      let symbol, changeStr;
+      if (asset.type === 'added') {
+        symbol = '+';
+        changeStr = '(new)';
+      } else if (asset.type === 'removed') {
+        symbol = '-';
+        changeStr = '(removed)';
+      } else {
+        symbol = '~';
+        changeStr = `(${formatBytes(asset.change, { signed: true })})`;
+      }
+      const reasonsStr = formatAssetReasonsText(asset);
+      lines.push(`${symbol} ${asset.name}  ${baseSizeStr} → ${prSizeStr}  ${changeStr}`);
+      if (reasonsStr) {
+        lines.push(`    Contributors: ${reasonsStr}`);
+      }
+    }
+
+    if (diff.baseAssetSize || diff.prAssetSize) {
+      lines.push('');
+      lines.push(`  Total assets: ${formatBytes(diff.baseAssetSize || 0, { signed: false })} → ${formatBytes(diff.prAssetSize || 0, { signed: false })} (${formatBytes(diff.totalAssetDiff || 0, { signed: true })})`);
+    }
+    lines.push('');
+  }
+
+  // Entrypoint changes
+  const entrypointDiff = diff.entrypointDiff || [];
+  const significantEntrypoints = entrypointDiff.filter(e => e.type !== 'unchanged');
+
+  if (significantEntrypoints.length > 0) {
+    lines.push('## Entrypoint Changes');
+    lines.push('');
+
+    for (const ep of significantEntrypoints) {
+      const baseSizeStr = ep.baseSize > 0 ? formatBytes(ep.baseSize, { signed: false }) : '-';
+      const prSizeStr = ep.prSize > 0 ? formatBytes(ep.prSize, { signed: false }) : '-';
+      let symbol, changeStr;
+      if (ep.type === 'added') {
+        symbol = '+';
+        changeStr = '(new entrypoint)';
+      } else if (ep.type === 'removed') {
+        symbol = '-';
+        changeStr = '(removed)';
+      } else {
+        symbol = '~';
+        changeStr = `(${formatBytes(ep.change, { signed: true })})`;
+      }
+      lines.push(`${symbol} ${ep.name}  ${baseSizeStr} → ${prSizeStr}  ${changeStr}`);
+    }
+    lines.push('');
+  }
 
   // Top changes
   if (diff.topChanges.length > 0) {
@@ -96,7 +160,7 @@ function generateReport(diff, summary, options = {}) {
     lines.push('');
 
     for (const change of significantAdded.slice(0, 10)) {
-      lines.push(`+ ${change.name} (${formatBytes(change.newSize)})`);
+      lines.push(`+ ${change.name} (${formatBytes(change.newSize, { signed: false })})`);
     }
     lines.push('');
   }
@@ -111,7 +175,7 @@ function generateReport(diff, summary, options = {}) {
     lines.push('');
 
     for (const change of significantRemoved.slice(0, 10)) {
-      lines.push(`- ${change.name} (${formatBytes(change.oldSize)})`);
+      lines.push(`- ${change.name} (${formatBytes(change.oldSize, { signed: false })})`);
     }
     lines.push('');
   }
@@ -127,7 +191,7 @@ function generateReport(diff, summary, options = {}) {
 
     for (const [pkg, change] of pkgChanges) {
       const sign = change > 0 ? '+' : '';
-      lines.push(`${sign}${formatBytes(change)} ${pkg}`);
+      lines.push(`${sign}${formatBytes(change, { signed: true })} ${pkg}`);
     }
     lines.push('');
   }
@@ -164,7 +228,33 @@ function generateJSONReport(diff, summary) {
       totalDiffFormatted: diff.totalDiffFormatted,
       nodeModulesDiff: diff.nodeModulesDiff,
       hasSignificantChanges: summary.isSignificant,
+      baseAssetSize: diff.baseAssetSize || 0,
+      prAssetSize: diff.prAssetSize || 0,
+      totalAssetDiff: diff.totalAssetDiff || 0,
     },
+    assets: (diff.assetDiff || []).map(a => ({
+      name: a.name,
+      type: a.type,
+      baseSize: a.baseSize,
+      prSize: a.prSize,
+      change: a.change,
+      changeFormatted: a.changeFormatted,
+      chunkNames: a.chunkNames,
+      reasons: (a.reasons || []).map(r => ({
+        name: r.name,
+        change: r.change,
+        changeFormatted: r.changeFormatted,
+        type: r.type,
+      })),
+    })),
+    entrypoints: (diff.entrypointDiff || []).map(e => ({
+      name: e.name,
+      type: e.type,
+      baseSize: e.baseSize,
+      prSize: e.prSize,
+      change: e.change,
+      changeFormatted: e.changeFormatted,
+    })),
     topChanges: diff.topChanges.map(c => ({
       name: c.name,
       type: c.type,
@@ -177,7 +267,7 @@ function generateJSONReport(diff, summary) {
     packages: Object.entries(diff.packageDiffs).map(([name, change]) => ({
       name,
       change,
-      changeFormatted: formatBytes(change),
+      changeFormatted: formatBytes(change, { signed: true }),
     })),
     counts: {
       added: diff.added.length,
@@ -189,16 +279,20 @@ function generateJSONReport(diff, summary) {
 }
 
 /**
- * Format bytes helper
- * @param {number} bytes
- * @returns {string}
+ * Format asset reasons (top contributors) for text report display.
+ * Returns a concise string like "lodash (+684 KB), App.js (+512 B)" or null if none.
+ * @param {Object} asset - AssetChange with reasons
+ * @returns {string|null}
  */
-function formatBytes(bytes) {
-  if (bytes === 0) return '0 B';
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB'];
-  const i = Math.floor(Math.log(Math.abs(bytes)) / Math.log(k));
-  return (bytes >= 0 ? '+' : '-') + parseFloat((Math.abs(bytes) / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+function formatAssetReasonsText(asset) {
+  if (asset.type === 'added' || asset.type === 'removed') return null;
+
+  const reasons = asset.reasons || [];
+  if (reasons.length === 0) return null;
+
+  return reasons
+    .map(r => `${r.name} (${r.changeFormatted})`)
+    .join(', ');
 }
 
 /**
