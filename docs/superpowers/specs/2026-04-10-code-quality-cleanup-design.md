@@ -38,12 +38,13 @@ function formatBytes(bytes, { signed = false } = {})
 function loadEnv(filePath)
 
 /**
- * Extract root cause module name from a webpack module identifier.
- * Strips loader prefixes (everything before last !) and leading ./
- * @param {string} name - Raw webpack module name
+ * Extract root cause source file from a module change's import chain.
+ * Walks the importChain and returns the first non-node_modules entry,
+ * stripping loader prefixes (everything before last !).
+ * @param {import('./diff-engine').ModuleChange} change - Module change object with importChain
  * @returns {string}
  */
-function getRootCause(name)
+function getRootCause(change)
 ```
 
 **`formatBytes` behavior:**
@@ -56,19 +57,24 @@ function getRootCause(name)
 - Read file with `fs.readFileSync`
 - Split by newlines, skip empty lines and lines starting with `#`
 - Split each line on first `=`, trim key and value
-- Strip surrounding quotes from value
-- Set `process.env[key] = value` (only if not already set)
+- Set `process.env[key] = value` only if not already set (preserves existing env vars)
+- Note: matches existing behavior exactly — no quote stripping (the existing code doesn't do this)
 
 **`getRootCause` behavior:**
-- Strip loader prefixes: `name.split('!').pop()`
-- Strip leading `./`: `.replace(/^\.\//, '')`
+- Takes a `ModuleChange` object (not a raw string)
+- If `change.importChain` is empty, returns `'Unknown'`
+- Iterates through `change.importChain`, returns the first entry where `isNodeModule()` returns false
+- Strips loader prefixes from the result: `item.split('!').pop()`
+- Falls back to `change.importChain[0]` if all entries are node_modules
+- Uses the rule-engine version's behavior (with loader prefix stripping) since it's more correct — the diff-engine version was missing this
+- Depends on `isNodeModule` from `stats-parser.js` (imported into utils.js)
 
 ### 2. Call site updates
 
 | Current location | Current function | Replacement |
 |-----------------|-----------------|-------------|
 | `stats-parser.js` | `formatBytes()` | Import from `utils.js` |
-| `diff-engine.js` | Re-exports `formatBytes` + has `formatSignedBytes` | Import `formatBytes` from `utils.js`, update `formatSignedBytes` to call it with `{ signed: true }` |
+| `diff-engine.js` | Imports `formatBytes` from stats-parser and re-exports it; has `formatSignedBytes` wrapper | Update import source from `stats-parser` to `utils`; keep `formatSignedBytes` in diff-engine.js (it wraps `formatBytes` internally) |
 | `scripts/diff.js` | Local `formatBytes()` with signed option | Import from `utils.js` |
 | `scripts/comment.js` | Local signed `formatBytes()` | Import from `utils.js` |
 | `scripts/analyze.js` | Local `formatBytes()` + `formatBytesAbs()` | Import from `utils.js` |
@@ -83,8 +89,8 @@ function getRootCause(name)
 |------|------|--------|
 | `stats-parser.js` | `findMainChunk()` | Exported but never called |
 | `diff-engine.js` | `filterChanges()` | Exported but never called |
-| `diff-engine.js` | `changed` array in `computeDiff()` | Populated but never read |
-| `rescript-analyzer.js` | `getLinesChanged()` | Exported but never called |
+| `diff-engine.js` | `changed` array at line 81 in `computeDiff()` | Populated at line 95 but never read after the loop; only `allChanges` is used downstream. Remove declaration and the `changed.push(change)` call |
+| `rescript-analyzer.js` | `getLinesChanged()` at line 283 | Exported at line 360 but never imported by any other file. Note: `cli.js` has its own separate `getLinesChanged` at line 365 which IS used — only the rescript-analyzer copy is dead |
 | `rescript-analyzer.js` | `correlateWithBundleChanges` in `module.exports` | Only called internally; keep function, remove from exports |
 
 ### 4. Error handling improvements
@@ -99,14 +105,13 @@ In `cli.js` `parseArgs()`, after processing each flag that expects a value (`--b
 
 #### 4c. Stats JSON validation
 
-In `stats-parser.js` `parseStats()`, add an upfront guard:
+In `stats-parser.js` `parseStats()`, upgrade the existing guard at line 54 (`if (!stats || !stats.modules)`) to use `Array.isArray`:
 ```js
 if (!stats || !Array.isArray(stats.modules)) {
   throw new Error('Invalid webpack stats: expected object with "modules" array');
 }
 ```
-
-This fires before any iteration, preventing silent NaN propagation from malformed input.
+Replace the existing check — do not add a second guard.
 
 ### 5. Test updates
 
@@ -122,7 +127,7 @@ This fires before any iteration, preventing silent NaN propagation from malforme
 |------|---------|
 | `lib/utils.js` | **New** — formatBytes, loadEnv, getRootCause |
 | `lib/stats-parser.js` | Remove formatBytes, findMainChunk; import formatBytes from utils; add stats validation |
-| `lib/diff-engine.js` | Remove formatBytes re-export, filterChanges, changed array, getRootCause; import from utils |
+| `lib/diff-engine.js` | Remove filterChanges, changed array (line 81 + push at line 95), getRootCause; update formatBytes import from stats-parser to utils; keep formatSignedBytes (just update its import) |
 | `lib/rule-engine.js` | Remove getRootCause; import from utils |
 | `lib/ai-client.js` | Add AbortSignal.timeout(300000) to fetch, handle AbortError |
 | `lib/rescript-analyzer.js` | Remove getLinesChanged, remove correlateWithBundleChanges from exports |
