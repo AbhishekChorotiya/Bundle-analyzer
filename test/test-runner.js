@@ -6,6 +6,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { formatBytes: utilsFormatBytes, loadEnv, getRootCause } = require('../lib/utils');
 
 // Test utilities
 let testsRun = 0;
@@ -48,7 +49,7 @@ console.log('Running Bundle AI Tests\n');
 
 // Test stats-parser
 console.log('--- Testing stats-parser.js ---');
-const { parseStats, isNodeModule, extractPackageName, formatBytes } = require('../lib/stats-parser');
+const { parseStats, isNodeModule, extractPackageName, formatBytes, parseAssets, parseEntrypoints, isDeliverableAsset, buildChunkToAssetsMap } = require('../lib/stats-parser');
 
 test('parseStats parses webpack stats correctly', () => {
   const sampleStats = JSON.parse(fs.readFileSync(path.join(__dirname, 'sample-base-stats.json'), 'utf-8'));
@@ -57,6 +58,9 @@ test('parseStats parses webpack stats correctly', () => {
   assertTrue(Array.isArray(result.modules), 'Should have modules array');
   assertEqual(result.modules.length, 6, 'Should have 6 modules');
   assertTrue(result.totalSize > 0, 'Should have positive total size');
+  assertTrue(Array.isArray(result.assets), 'Should have assets array');
+  assertTrue(result.totalAssetSize > 0, 'Should have positive total asset size');
+  assertTrue(Array.isArray(result.entrypoints), 'Should have entrypoints array');
 });
 
 test('isNodeModule detects node_modules correctly', () => {
@@ -78,9 +82,57 @@ test('formatBytes formats correctly', () => {
   assertTrue(formatBytes(1536).includes('1.5'), '1.5 KB');
 });
 
+test('utils formatBytes formats correctly', () => {
+  assertEqual(utilsFormatBytes(0), '0 B', 'Zero bytes');
+  assertEqual(utilsFormatBytes(1024), '1 KB', '1 kilobyte');
+  assertEqual(utilsFormatBytes(1024 * 1024), '1 MB', '1 megabyte');
+  assertTrue(utilsFormatBytes(1536).includes('1.5'), '1.5 KB');
+});
+
+test('utils formatBytes signed option', () => {
+  assertTrue(utilsFormatBytes(1024, { signed: true }).startsWith('+'), 'Positive signed');
+  assertTrue(utilsFormatBytes(-1024, { signed: true }).startsWith('-'), 'Negative signed');
+  assertTrue(!utilsFormatBytes(1024).startsWith('+'), 'Unsigned by default');
+});
+
+test('isDeliverableAsset filters non-deliverable files', () => {
+  assertTrue(isDeliverableAsset('main.bundle.js'), 'JS files are deliverable');
+  assertTrue(isDeliverableAsset('vendor.bundle.js'), 'Vendor JS is deliverable');
+  assertFalse(isDeliverableAsset('main.bundle.js.map'), 'Source maps are not deliverable');
+  assertFalse(isDeliverableAsset('main.bundle.js.LICENSE.txt'), 'License files are not deliverable');
+  assertFalse(isDeliverableAsset('vendor.LICENSE'), '.LICENSE files are not deliverable');
+});
+
+test('parseAssets filters out non-deliverable assets and sorts by size', () => {
+  const sampleStats = JSON.parse(fs.readFileSync(path.join(__dirname, 'sample-base-stats.json'), 'utf-8'));
+  const assets = parseAssets(sampleStats);
+
+  // Base has 4 assets total: main.bundle.js, vendor.bundle.js, main.bundle.js.map, main.bundle.js.LICENSE.txt
+  // Only 2 are deliverable
+  assertEqual(assets.length, 2, 'Should have 2 deliverable assets');
+  assertEqual(assets[0].name, 'main.bundle.js', 'Largest asset should be first');
+  assertTrue(assets[0].size > assets[1].size, 'Should be sorted by size descending');
+});
+
+test('parseEntrypoints parses entrypoints with string[] asset format', () => {
+  const sampleStats = JSON.parse(fs.readFileSync(path.join(__dirname, 'sample-base-stats.json'), 'utf-8'));
+  const entrypoints = parseEntrypoints(sampleStats);
+
+  assertEqual(entrypoints.length, 2, 'Should have 2 entrypoints');
+  const app = entrypoints.find(e => e.name === 'app');
+  assertTrue(!!app, 'Should have app entrypoint');
+  assertTrue(app.assetsSize > 0, 'App entrypoint should have positive size');
+  assertEqual(app.assets.length, 2, 'App entrypoint should have 2 assets');
+});
+
+test('parseEntrypoints handles missing entrypoints gracefully', () => {
+  const entrypoints = parseEntrypoints({});
+  assertEqual(entrypoints.length, 0, 'Should return empty array for missing entrypoints');
+});
+
 // Test diff-engine
 console.log('\n--- Testing diff-engine.js ---');
-const { computeDiff, generateSummary } = require('../lib/diff-engine');
+const { computeDiff, generateSummary, computeAssetDiff, computeEntrypointDiff, computeAssetReasons } = require('../lib/diff-engine');
 
 test('computeDiff calculates size differences', () => {
   const baseStats = parseStats(JSON.parse(fs.readFileSync(path.join(__dirname, 'sample-base-stats.json'), 'utf-8')));
@@ -106,9 +158,178 @@ test('generateSummary produces valid summary', () => {
   assertTrue(['increase', 'decrease', 'unchanged'].includes(summary.direction), 'Should have valid direction');
 });
 
+test('computeDiff includes asset and entrypoint data', () => {
+  const baseStats = parseStats(JSON.parse(fs.readFileSync(path.join(__dirname, 'sample-base-stats.json'), 'utf-8')));
+  const prStats = parseStats(JSON.parse(fs.readFileSync(path.join(__dirname, 'sample-pr-stats.json'), 'utf-8')));
+  const diff = computeDiff(baseStats, prStats);
+
+  assertTrue(Array.isArray(diff.assetDiff), 'Should have assetDiff');
+  assertTrue(Array.isArray(diff.entrypointDiff), 'Should have entrypointDiff');
+  assertTrue(typeof diff.totalAssetDiff === 'number', 'Should have totalAssetDiff');
+  assertTrue(typeof diff.baseAssetSize === 'number', 'Should have baseAssetSize');
+  assertTrue(typeof diff.prAssetSize === 'number', 'Should have prAssetSize');
+});
+
+test('computeAssetDiff detects added, changed, and unchanged assets', () => {
+  const baseAssets = [
+    { name: 'main.js', size: 100000, chunkNames: ['main'] },
+    { name: 'vendor.js', size: 50000, chunkNames: ['vendor'] },
+    { name: 'old.js', size: 10000, chunkNames: ['old'] },
+  ];
+  const prAssets = [
+    { name: 'main.js', size: 120000, chunkNames: ['main'] },
+    { name: 'vendor.js', size: 50000, chunkNames: ['vendor'] },
+    { name: 'new.js', size: 30000, chunkNames: ['new'] },
+  ];
+
+  const diff = computeAssetDiff(baseAssets, prAssets);
+
+  const added = diff.filter(a => a.type === 'added');
+  const removed = diff.filter(a => a.type === 'removed');
+  const changed = diff.filter(a => a.type === 'changed');
+  const unchanged = diff.filter(a => a.type === 'unchanged');
+
+  assertEqual(added.length, 1, 'Should have 1 added asset');
+  assertEqual(added[0].name, 'new.js', 'Added asset should be new.js');
+  assertEqual(removed.length, 1, 'Should have 1 removed asset');
+  assertEqual(removed[0].name, 'old.js', 'Removed asset should be old.js');
+  assertEqual(changed.length, 1, 'Should have 1 changed asset');
+  assertEqual(changed[0].name, 'main.js', 'Changed asset should be main.js');
+  assertEqual(changed[0].change, 20000, 'Change should be +20000');
+  assertEqual(unchanged.length, 1, 'Should have 1 unchanged asset');
+  assertEqual(unchanged[0].name, 'vendor.js', 'Unchanged asset should be vendor.js');
+});
+
+test('computeEntrypointDiff detects new entrypoints', () => {
+  const baseEntrypoints = [
+    { name: 'app', assetsSize: 200000 },
+    { name: 'HyperLoader', assetsSize: 50000 },
+  ];
+  const prEntrypoints = [
+    { name: 'app', assetsSize: 210000 },
+    { name: 'HyperLoader', assetsSize: 50000 },
+    { name: 'hs-sdk-sw', assetsSize: 65000 },
+  ];
+
+  const diff = computeEntrypointDiff(baseEntrypoints, prEntrypoints);
+
+  const added = diff.filter(e => e.type === 'added');
+  const changed = diff.filter(e => e.type === 'changed');
+  const unchanged = diff.filter(e => e.type === 'unchanged');
+
+  assertEqual(added.length, 1, 'Should have 1 new entrypoint');
+  assertEqual(added[0].name, 'hs-sdk-sw', 'New entrypoint should be hs-sdk-sw');
+  assertEqual(added[0].prSize, 65000, 'New entrypoint size should be 65000');
+  assertEqual(changed.length, 1, 'Should have 1 changed entrypoint');
+  assertEqual(unchanged.length, 1, 'Should have 1 unchanged entrypoint');
+});
+
+test('buildChunkToAssetsMap maps chunk IDs to deliverable asset filenames', () => {
+  const sampleStats = JSON.parse(fs.readFileSync(path.join(__dirname, 'sample-base-stats.json'), 'utf-8'));
+  const map = buildChunkToAssetsMap(sampleStats);
+
+  // Chunk 0 → main.bundle.js (not .map or .LICENSE.txt)
+  assertTrue(Array.isArray(map[0]), 'Should have mapping for chunk 0');
+  assertTrue(map[0].includes('main.bundle.js'), 'Chunk 0 should map to main.bundle.js');
+  assertFalse(map[0].includes('main.bundle.js.map'), 'Should NOT include .map files');
+  assertFalse(map[0].includes('main.bundle.js.LICENSE.txt'), 'Should NOT include .LICENSE.txt');
+
+  // Chunk 1 → vendor.bundle.js
+  assertTrue(Array.isArray(map[1]), 'Should have mapping for chunk 1');
+  assertTrue(map[1].includes('vendor.bundle.js'), 'Chunk 1 should map to vendor.bundle.js');
+});
+
+test('buildChunkToAssetsMap handles PR stats with 3 chunks', () => {
+  const sampleStats = JSON.parse(fs.readFileSync(path.join(__dirname, 'sample-pr-stats.json'), 'utf-8'));
+  const map = buildChunkToAssetsMap(sampleStats);
+
+  assertTrue(Array.isArray(map[2]), 'Should have mapping for chunk 2');
+  assertTrue(map[2].includes('sw.bundle.js'), 'Chunk 2 should map to sw.bundle.js');
+  // sw.bundle.js.LICENSE.txt should be filtered out
+  assertEqual(map[2].length, 1, 'Chunk 2 should only have 1 deliverable asset');
+});
+
+test('computeAssetReasons attributes module changes to correct assets', () => {
+  const baseStats = parseStats(JSON.parse(fs.readFileSync(path.join(__dirname, 'sample-base-stats.json'), 'utf-8')));
+  const prStats = parseStats(JSON.parse(fs.readFileSync(path.join(__dirname, 'sample-pr-stats.json'), 'utf-8')));
+  const diff = computeDiff(baseStats, prStats);
+
+  // main.bundle.js changed — should have reasons (lodash, chart.js, NewFeature.js are in chunk 0)
+  const mainAsset = diff.assetDiff.find(a => a.name === 'main.bundle.js');
+  assertTrue(!!mainAsset, 'Should have main.bundle.js asset');
+  assertEqual(mainAsset.type, 'changed', 'main.bundle.js should be changed');
+  assertTrue(Array.isArray(mainAsset.reasons), 'Should have reasons array');
+  assertTrue(mainAsset.reasons.length > 0, 'Should have at least one reason');
+
+  // lodash (700KB added) should be the top contributor
+  assertEqual(mainAsset.reasons[0].name, 'lodash', 'Top contributor should be lodash');
+  assertTrue(mainAsset.reasons[0].change > 0, 'lodash should have positive change');
+});
+
+test('computeAssetReasons returns empty reasons for new/removed assets', () => {
+  const baseStats = parseStats(JSON.parse(fs.readFileSync(path.join(__dirname, 'sample-base-stats.json'), 'utf-8')));
+  const prStats = parseStats(JSON.parse(fs.readFileSync(path.join(__dirname, 'sample-pr-stats.json'), 'utf-8')));
+  const diff = computeDiff(baseStats, prStats);
+
+  // sw.bundle.js is added — should have empty reasons
+  const swAsset = diff.assetDiff.find(a => a.name === 'sw.bundle.js');
+  assertTrue(!!swAsset, 'Should have sw.bundle.js asset');
+  assertEqual(swAsset.type, 'added', 'sw.bundle.js should be added');
+  assertEqual(swAsset.reasons.length, 0, 'New asset should have empty reasons');
+});
+
+test('computeAssetReasons groups node_modules by package name', () => {
+  // Both lodash/lodash.js and chart.js/dist/chart.js are in chunk 0 → main.bundle.js
+  // They should be grouped by package name (lodash, chart.js)
+  const baseStats = parseStats(JSON.parse(fs.readFileSync(path.join(__dirname, 'sample-base-stats.json'), 'utf-8')));
+  const prStats = parseStats(JSON.parse(fs.readFileSync(path.join(__dirname, 'sample-pr-stats.json'), 'utf-8')));
+  const diff = computeDiff(baseStats, prStats);
+
+  const mainAsset = diff.assetDiff.find(a => a.name === 'main.bundle.js');
+  const reasonNames = mainAsset.reasons.map(r => r.name);
+
+  // Should include package names, not full module paths
+  assertTrue(reasonNames.includes('lodash'), 'Should include lodash package');
+  // chart.js and NewFeature.js should also be present (top 3)
+  assertTrue(mainAsset.reasons.length <= 3, 'Should have at most 3 reasons (top N)');
+});
+
+// Test diff.js report functions
+console.log('\n--- Testing diff.js report functions ---');
+const { generateReport, generateJSONReport, runDiff } = require('../scripts/diff');
+
+test('generateReport includes Contributors line for changed assets', () => {
+  const result = runDiff(
+    path.join(__dirname, 'sample-base-stats.json'),
+    path.join(__dirname, 'sample-pr-stats.json'),
+    { silent: true }
+  );
+  const report = result.report;
+
+  assertTrue(report.includes('Contributors:'), 'Report should include Contributors line');
+  assertTrue(report.includes('lodash'), 'Report should mention lodash as contributor');
+});
+
+test('generateJSONReport includes reasons in asset objects', () => {
+  const result = runDiff(
+    path.join(__dirname, 'sample-base-stats.json'),
+    path.join(__dirname, 'sample-pr-stats.json'),
+    { silent: true }
+  );
+  const json = generateJSONReport(result.diff, result.summary);
+
+  assertTrue(Array.isArray(json.assets), 'JSON should have assets array');
+  const mainAsset = json.assets.find(a => a.name === 'main.bundle.js');
+  assertTrue(!!mainAsset, 'JSON should have main.bundle.js');
+  assertTrue(Array.isArray(mainAsset.reasons), 'Asset should have reasons array');
+  assertTrue(mainAsset.reasons.length > 0, 'Changed asset should have non-empty reasons');
+  assertTrue(!!mainAsset.reasons[0].name, 'Reason should have name');
+  assertTrue(typeof mainAsset.reasons[0].change === 'number', 'Reason should have numeric change');
+});
+
 // Test rule-engine
 console.log('\n--- Testing rule-engine.js ---');
-const { runDetection, detectFullLibraryImports, detectUnexpectedDependencies, ALLOWED_DEPENDENCIES } = require('../lib/rule-engine');
+const { runDetection, detectFullLibraryImports, detectUnexpectedDependencies, detectNewEntrypoints, detectLargeAssetChanges, ALLOWED_DEPENDENCIES } = require('../lib/rule-engine');
 
 test('runDetection identifies issues', () => {
   const baseStats = parseStats(JSON.parse(fs.readFileSync(path.join(__dirname, 'sample-base-stats.json'), 'utf-8')));
@@ -176,6 +397,60 @@ test('ALLOWED_DEPENDENCIES matches package.json deps', () => {
   assertFalse(ALLOWED_DEPENDENCIES.includes('lodash'), 'Should NOT include lodash');
 });
 
+test('detectNewEntrypoints flags new entrypoints', () => {
+  const mockDiff = {
+    entrypointDiff: [
+      { name: 'app', type: 'changed', baseSize: 200000, prSize: 210000, change: 10000 },
+      { name: 'hs-sdk-sw', type: 'added', baseSize: 0, prSize: 65536, change: 65536 },
+    ],
+  };
+
+  const violations = detectNewEntrypoints(mockDiff);
+
+  assertEqual(violations.length, 1, 'Should flag 1 new entrypoint');
+  assertEqual(violations[0].id, 'NEW_ENTRYPOINT', 'Should have correct rule ID');
+  assertTrue(violations[0].message.includes('hs-sdk-sw'), 'Should mention entrypoint name');
+  assertEqual(violations[0].severity, 'info', 'Should be info severity');
+});
+
+test('detectNewEntrypoints returns empty for no new entrypoints', () => {
+  const mockDiff = {
+    entrypointDiff: [
+      { name: 'app', type: 'unchanged', baseSize: 200000, prSize: 200000, change: 0 },
+    ],
+  };
+
+  const violations = detectNewEntrypoints(mockDiff);
+  assertEqual(violations.length, 0, 'Should not flag unchanged entrypoints');
+});
+
+test('detectLargeAssetChanges flags assets growing >50KB', () => {
+  const mockDiff = {
+    assetDiff: [
+      { name: 'main.js', type: 'changed', baseSize: 100000, prSize: 200000, change: 100000 },
+      { name: 'vendor.js', type: 'changed', baseSize: 50000, prSize: 51000, change: 1000 },
+    ],
+  };
+
+  const violations = detectLargeAssetChanges(mockDiff);
+
+  assertEqual(violations.length, 1, 'Should flag 1 large asset change');
+  assertEqual(violations[0].id, 'LARGE_ASSET_INCREASE', 'Should have correct rule ID');
+  assertTrue(violations[0].message.includes('main.js'), 'Should mention asset name');
+  assertEqual(violations[0].severity, 'warning', 'Should be warning severity');
+});
+
+test('detectLargeAssetChanges returns empty for small changes', () => {
+  const mockDiff = {
+    assetDiff: [
+      { name: 'main.js', type: 'changed', baseSize: 100000, prSize: 110000, change: 10000 },
+    ],
+  };
+
+  const violations = detectLargeAssetChanges(mockDiff);
+  assertEqual(violations.length, 0, 'Should not flag small changes');
+});
+
 // Test rescript-analyzer
 console.log('\n--- Testing rescript-analyzer.js ---');
 const { extractImports, mapToJSDependencies, RESCRIPT_TO_JS_DEPS } = require('../lib/rescript-analyzer');
@@ -238,6 +513,52 @@ test('isAIAvailable checks env var', () => {
 
   // This is environment dependent
   assertTrue(typeof isAIAvailable() === 'boolean', 'Should return boolean');
+});
+
+// Test utils.js
+console.log('\n--- Testing utils.js ---');
+
+test('utils loadEnv loads environment variables', () => {
+  const tmpDir = path.join(__dirname, '.tmp-test');
+  const tmpEnv = path.join(tmpDir, '.env.test');
+  fs.mkdirSync(tmpDir, { recursive: true });
+  fs.writeFileSync(tmpEnv, 'TEST_LOAD_ENV_KEY=hello\n# comment\nTEST_LOAD_ENV_KEY2=world\n');
+
+  delete process.env.TEST_LOAD_ENV_KEY;
+  delete process.env.TEST_LOAD_ENV_KEY2;
+
+  loadEnv(tmpEnv);
+
+  assertEqual(process.env.TEST_LOAD_ENV_KEY, 'hello', 'Should set key');
+  assertEqual(process.env.TEST_LOAD_ENV_KEY2, 'world', 'Should set key2');
+
+  // Should not override existing
+  process.env.TEST_LOAD_ENV_KEY = 'existing';
+  loadEnv(tmpEnv);
+  assertEqual(process.env.TEST_LOAD_ENV_KEY, 'existing', 'Should not override');
+
+  // Cleanup
+  delete process.env.TEST_LOAD_ENV_KEY;
+  delete process.env.TEST_LOAD_ENV_KEY2;
+  fs.rmSync(tmpDir, { recursive: true });
+});
+
+test('utils getRootCause extracts source file from import chain', () => {
+  // Should return first non-node_modules entry
+  const change1 = { importChain: ['./node_modules/lodash/index.js', './src/App.js'] };
+  assertEqual(getRootCause(change1), './src/App.js', 'Should find source file');
+
+  // Should strip loader prefixes
+  const change2 = { importChain: ['babel-loader!./src/utils.js'] };
+  assertEqual(getRootCause(change2), './src/utils.js', 'Should strip loader prefix');
+
+  // Empty chain returns Unknown
+  const change3 = { importChain: [] };
+  assertEqual(getRootCause(change3), 'Unknown', 'Empty chain');
+
+  // All node_modules returns first entry
+  const change4 = { importChain: ['./node_modules/a/index.js', './node_modules/b/index.js'] };
+  assertEqual(getRootCause(change4), './node_modules/a/index.js', 'All node_modules fallback');
 });
 
 // Summary
