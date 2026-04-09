@@ -561,6 +561,25 @@ test('utils getRootCause extracts source file from import chain', () => {
   assertEqual(getRootCause(change4), './node_modules/a/index.js', 'All node_modules fallback');
 });
 
+test('parseStats throws on invalid input', () => {
+  let threw = false;
+  try {
+    parseStats(null);
+  } catch (e) {
+    threw = true;
+    assertTrue(e.message.includes('modules'), 'Error message mentions modules');
+  }
+  assertTrue(threw, 'Should throw on null input');
+
+  threw = false;
+  try {
+    parseStats({ modules: 'not-an-array' });
+  } catch (e) {
+    threw = true;
+  }
+  assertTrue(threw, 'Should throw on non-array modules');
+});
+
 // Summary
 console.log('\n--- Test Summary ---');
 console.log(`Tests run: ${testsRun}`);
