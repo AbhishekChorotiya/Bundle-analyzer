@@ -158,6 +158,44 @@ test('estimateCompressedSize handles zero size', () => {
   assertEqual(result.brotli, 0, 'Zero size brotli should be 0');
 });
 
+test('findDuplicatePackages detects multi-path packages', () => {
+  const { findDuplicatePackages } = require('../lib/stats-parser');
+  const modules = [
+    { name: 'node_modules/lodash/lodash.js', size: 50000, isNodeModule: true },
+    { name: 'node_modules/lib-a/node_modules/lodash/lodash.js', size: 45000, isNodeModule: true },
+    { name: 'node_modules/react/index.js', size: 5000, isNodeModule: true },
+    { name: 'src/App.js', size: 3000, isNodeModule: false },
+  ];
+  const result = findDuplicatePackages(modules);
+  assertEqual(result.length, 1, 'Should find 1 duplicate');
+  assertEqual(result[0].name, 'lodash', 'Duplicate should be lodash');
+  assertEqual(result[0].instanceCount, 2, 'Should have 2 instances');
+  assertEqual(result[0].totalSize, 95000, 'Total size should be sum');
+  assertEqual(result[0].wastedSize, 45000, 'Wasted should be all except largest');
+});
+
+test('findDuplicatePackages handles scoped packages', () => {
+  const { findDuplicatePackages } = require('../lib/stats-parser');
+  const modules = [
+    { name: 'node_modules/@babel/runtime/helpers/esm/extends.js', size: 1000, isNodeModule: true },
+    { name: 'node_modules/some-lib/node_modules/@babel/runtime/helpers/esm/extends.js', size: 1200, isNodeModule: true },
+  ];
+  const result = findDuplicatePackages(modules);
+  assertEqual(result.length, 1, 'Should find 1 duplicate');
+  assertEqual(result[0].name, '@babel/runtime', 'Should detect scoped package');
+});
+
+test('findDuplicatePackages returns empty for no duplicates', () => {
+  const { findDuplicatePackages } = require('../lib/stats-parser');
+  const modules = [
+    { name: 'node_modules/react/index.js', size: 5000, isNodeModule: true },
+    { name: 'node_modules/react-dom/index.js', size: 20000, isNodeModule: true },
+    { name: 'src/App.js', size: 3000, isNodeModule: false },
+  ];
+  const result = findDuplicatePackages(modules);
+  assertEqual(result.length, 0, 'Should find no duplicates');
+});
+
 test('parseEntrypoints computes compressed sizes', () => {
   const stats = {
     assets: [
