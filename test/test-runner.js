@@ -1311,6 +1311,52 @@ testAsync('cloneAndBuild: rejects with invalid repo URL', async () => {
   }
 });
 
+// ─── Orchestrator Pipeline Tests ───────────────────────────────────────────
+
+testAsync('orchestrate runPipeline: file mode produces all outputs', async () => {
+  // Use the same approach as the orchestrator's file mode
+  const { computeAnalysisInputs, generateAnalysisReport, generateJSONOutput } = require('../scripts/analyze');
+  const { generateComment } = require('../scripts/comment');
+  const { generateReport: generateDiffReport } = require('../scripts/diff');
+  const { analyzeOffline } = require('../lib/ai-client');
+  const { runWithConcurrency } = require('../lib/concurrency');
+
+  const baseStatsPath = path.join(__dirname, 'sample-base-stats.json');
+  const prStatsPath = path.join(__dirname, 'sample-pr-stats.json');
+
+  // Phase 2: Analyze
+  const { diff, summary, detections, baseStats, prStats } = computeAnalysisInputs(baseStatsPath, prStatsPath);
+  assertTrue(diff !== undefined, 'Should compute diff');
+  assertTrue(detections !== undefined, 'Should compute detections');
+
+  // Phase 3: AI (offline for tests)
+  const aiResult = analyzeOffline(diff, detections);
+  assertTrue(aiResult.verdict !== undefined, 'AI result should have verdict');
+
+  // Phase 4: Reports (parallel)
+  const context = {};
+  const analysis = { diff, ai: aiResult, detections, summary };
+  const reportTasks = [
+    () => Promise.resolve(generateAnalysisReport(diff, detections, aiResult, context)),
+    () => Promise.resolve(generateJSONOutput({ diff, detections, ai: aiResult })),
+    () => Promise.resolve(generateComment(analysis)),
+    () => Promise.resolve(generateDiffReport(diff, summary)),
+  ];
+
+  const results = await runWithConcurrency(reportTasks, 3);
+
+  assertEqual(results.length, 4, 'Should have 4 report results');
+  assertTrue(typeof results[0] === 'string', 'Text report should be string');
+  assertTrue(typeof results[1] === 'object', 'JSON output should be object');
+  assertTrue(typeof results[2] === 'string', 'Comment should be string');
+  assertTrue(typeof results[3] === 'string', 'Diff report should be string');
+
+  // Verify JSON output has expected structure
+  assertTrue(results[1].summary !== undefined, 'JSON should have summary');
+  assertTrue(results[1].aiAnalysis !== undefined, 'JSON should have aiAnalysis');
+  assertTrue(results[1].issues !== undefined, 'JSON should have issues');
+});
+
 // Run async tests
 async function runAsyncTests() {
   for (const { name, fn } of asyncTests) {
