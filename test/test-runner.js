@@ -1086,6 +1086,37 @@ test('generateJSONOutput includes compressed and duplicates fields', () => {
   assertEqual(json.entrypoints.changes[0].gzipSize, 36000, 'Entrypoint should have gzipSize');
 });
 
+// E2E integration test: compressed sizes + duplicates through full pipeline
+console.log('\n--- E2E Integration Tests ---');
+
+test('full pipeline: compressed sizes and duplicates flow through computeDiff', () => {
+  const baseStats = parseStats(JSON.parse(fs.readFileSync(path.join(__dirname, 'sample-base-stats.json'), 'utf-8')));
+  const prStats = parseStats(JSON.parse(fs.readFileSync(path.join(__dirname, 'sample-pr-stats.json'), 'utf-8')));
+
+  // Verify compressed sizes on parsed assets
+  assertTrue(prStats.assets[0].compressed.gzip > 0, 'PR assets should have gzip sizes');
+  assertTrue(prStats.totalGzipSize > 0, 'PR should have total gzip size');
+
+  // Verify duplicates detected
+  assertTrue(prStats.duplicates.length > 0, 'PR should have duplicates');
+  const reactDup = prStats.duplicates.find(d => d.name === 'react');
+  assertTrue(reactDup !== undefined, 'react should be a duplicate in PR');
+
+  // Compute diff
+  const diff = computeDiff(baseStats, prStats);
+
+  // Verify gzip fields flow through
+  assertTrue(diff.prGzipSize > 0, 'Diff should have PR gzip size');
+  assertTrue(diff.baseGzipSize > 0, 'Diff should have base gzip size');
+  const mainAsset = diff.assetDiff.find(a => a.name === 'main.bundle.js');
+  assertTrue(mainAsset.prGzip > 0, 'Asset diff should have prGzip');
+
+  // Verify new duplicates
+  assertTrue(Array.isArray(diff.newDuplicates), 'Should have newDuplicates array');
+  const newReact = diff.newDuplicates.find(d => d.name === 'react');
+  assertTrue(newReact !== undefined, 'react duplicate should be new (not in base)');
+});
+
 // Summary
 console.log('\n--- Test Summary ---');
 console.log(`Tests run: ${testsRun}`);

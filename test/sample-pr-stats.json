@@ -253,6 +253,24 @@
       "chunks": [2],
       "reasons": [],
       "usedExports": true
+    },
+    {
+      "id": 10,
+      "identifier": "/project/node_modules/lib-a/node_modules/react/index.js",
+      "name": "./node_modules/lib-a/node_modules/react/index.js",
+      "size": 4500,
+      "chunks": [0],
+      "reasons": [
+        {
+          "moduleIdentifier": "/project/node_modules/lib-a/index.js",
+          "module": "./node_modules/lib-a/index.js",
+          "moduleName": "./node_modules/lib-a/index.js",
+          "type": "harmony side effect evaluation",
+          "userRequest": "react",
+          "loc": "1:0-26"
+        }
+      ],
+      "usedExports": ["createElement"]
     }
   ],
   "namedChunkGroups": {
