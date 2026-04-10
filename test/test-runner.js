@@ -1192,6 +1192,30 @@ testAsync('runWithConcurrency: single task works', async () => {
   assertEqual(results[0], 42);
 });
 
+// ─── Clone Builder Tests ───────────────────────────────────────────────────
+const { cloneAndBuild } = require('../lib/clone-builder');
+
+test('cloneAndBuild: exported function exists', () => {
+  assertEqual(typeof cloneAndBuild, 'function', 'cloneAndBuild should be a function');
+});
+
+testAsync('cloneAndBuild: rejects with invalid repo URL', async () => {
+  const tmpDir = path.join(__dirname, '..', 'tmp', 'test-clone-builder');
+  let caught = false;
+  try {
+    await cloneAndBuild('not-a-valid-url', 'main', tmpDir);
+  } catch (e) {
+    caught = true;
+    assertTrue(e.message.length > 0, 'Should have error message');
+  }
+  assertTrue(caught, 'Should reject with invalid repo URL');
+
+  // Clean up
+  if (fs.existsSync(tmpDir)) {
+    fs.rmSync(tmpDir, { recursive: true });
+  }
+});
+
 // Run async tests
 async function runAsyncTests() {
   for (const { name, fn } of asyncTests) {
