@@ -40,7 +40,7 @@ function parseArgs(args) {
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     const next = () => {
-      if (!args[i + 1] || args[i + 1].startsWith('--')) return null;
+      if (!args[i + 1] || args[i + 1].startsWith('-')) return null;
       return args[++i];
     };
 
