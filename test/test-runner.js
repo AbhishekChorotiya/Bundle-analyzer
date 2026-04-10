@@ -915,6 +915,42 @@ test('computeNewDuplicates returns empty when no new duplicates', () => {
   assertEqual(result.length, 0, 'Should be empty when same duplicates');
 });
 
+// Test detectDuplicateDependencies (DUPLICATE_DEPENDENCY rule)
+console.log('\n--- Testing DUPLICATE_DEPENDENCY rule ---');
+
+test('detectDuplicateDependencies flags new duplicates from diff.newDuplicates', () => {
+  const { runDetection } = require('../lib/rule-engine');
+  const diff = {
+    added: [], allChanges: [], topChanges: [], removed: [],
+    totalDiff: 0, nodeModulesDiff: 0, baseSize: 100000, prSize: 100000,
+    packageDiffs: {}, assetDiff: [], entrypointDiff: [],
+    newDuplicates: [
+      { name: 'lodash', paths: ['node_modules/lodash', 'node_modules/a/node_modules/lodash'], instanceCount: 2, totalSize: 90000, wastedSize: 40000 },
+    ],
+  };
+  const result = runDetection(diff);
+  const dupRule = result.violations.find(v => v.id === 'DUPLICATE_DEPENDENCY');
+  assertTrue(dupRule !== undefined, 'Should have DUPLICATE_DEPENDENCY violation');
+  assertEqual(dupRule.severity, 'warning', 'Should be warning for <50KB waste');
+  assertTrue(dupRule.message.includes('lodash'), 'Message should mention lodash');
+});
+
+test('detectDuplicateDependencies is critical for large waste', () => {
+  const { runDetection } = require('../lib/rule-engine');
+  const diff = {
+    added: [], allChanges: [], topChanges: [], removed: [],
+    totalDiff: 0, nodeModulesDiff: 0, baseSize: 100000, prSize: 100000,
+    packageDiffs: {}, assetDiff: [], entrypointDiff: [],
+    newDuplicates: [
+      { name: 'moment', paths: ['a', 'b'], instanceCount: 2, totalSize: 200000, wastedSize: 95000 },
+    ],
+  };
+  const result = runDetection(diff);
+  const dupRule = result.violations.find(v => v.id === 'DUPLICATE_DEPENDENCY');
+  assertTrue(dupRule !== undefined, 'Should have DUPLICATE_DEPENDENCY violation');
+  assertEqual(dupRule.severity, 'critical', 'Should be critical for >=50KB waste');
+});
+
 // Summary
 console.log('\n--- Test Summary ---');
 console.log(`Tests run: ${testsRun}`);
