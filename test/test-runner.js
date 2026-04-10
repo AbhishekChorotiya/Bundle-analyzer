@@ -132,7 +132,7 @@ test('parseEntrypoints handles missing entrypoints gracefully', () => {
 
 // Test diff-engine
 console.log('\n--- Testing diff-engine.js ---');
-const { computeDiff, generateSummary, computeAssetDiff, computeEntrypointDiff, computeAssetReasons } = require('../lib/diff-engine');
+const { computeDiff, generateSummary, computeAssetDiff, computeEntrypointDiff, computeAssetReasons, computeEntrypointReasons } = require('../lib/diff-engine');
 
 test('computeDiff calculates size differences', () => {
   const baseStats = parseStats(JSON.parse(fs.readFileSync(path.join(__dirname, 'sample-base-stats.json'), 'utf-8')));
@@ -688,6 +688,53 @@ test('computeAssetReasons uses asset-level chunks as fallback', () => {
   assertEqual(html.reasons[0].change, 15);
   assertEqual(html.reasons[1].name, 'react', 'Second should be react package');
   assertEqual(html.reasons[1].change, 5);
+});
+
+test('computeEntrypointReasons maps module changes to entrypoints via chunk IDs', () => {
+  const entrypointDiff = [
+    { name: 'app', baseSize: 1000, prSize: 1100, change: 100, type: 'changed' },
+    { name: 'loader', baseSize: 500, prSize: 0, change: -500, type: 'removed' },
+  ];
+  const moduleChanges = [
+    { name: 'src/App.js', change: 60, chunks: [0], packageName: null },
+    { name: 'node_modules/lodash/index.js', change: 30, chunks: [0, 1], packageName: 'lodash' },
+    { name: 'src/utils.js', change: 10, chunks: [2], packageName: null },
+  ];
+  const baseEntrypoints = [
+    { name: 'app', chunks: [0, 1] },
+    { name: 'loader', chunks: [1] },
+  ];
+  const prEntrypoints = [
+    { name: 'app', chunks: [0, 1] },
+  ];
+
+  computeEntrypointReasons(entrypointDiff, moduleChanges, baseEntrypoints, prEntrypoints);
+
+  const app = entrypointDiff[0];
+  assertEqual(app.reasons.length, 2, 'app should have 2 contributors (chunks 0,1)');
+  assertEqual(app.reasons[0].name, 'src/App.js', 'First should be App.js (60)');
+  assertEqual(app.reasons[0].change, 60);
+  assertEqual(app.reasons[1].name, 'lodash', 'Second should be lodash (30)');
+
+  const loader = entrypointDiff[1];
+  assertEqual(loader.reasons.length, 0, 'Removed entrypoint should have empty reasons');
+});
+
+test('computeEntrypointReasons returns empty reasons for unchanged entrypoints', () => {
+  const entrypointDiff = [
+    { name: 'app', baseSize: 1000, prSize: 1000, change: 0, type: 'unchanged' },
+    { name: 'new-ep', baseSize: 0, prSize: 500, change: 500, type: 'added' },
+  ];
+  const moduleChanges = [
+    { name: 'src/App.js', change: 0, chunks: [0], packageName: null },
+  ];
+  const baseEntrypoints = [{ name: 'app', chunks: [0] }];
+  const prEntrypoints = [{ name: 'app', chunks: [0] }, { name: 'new-ep', chunks: [1] }];
+
+  computeEntrypointReasons(entrypointDiff, moduleChanges, baseEntrypoints, prEntrypoints);
+
+  assertEqual(entrypointDiff[0].reasons.length, 0, 'Unchanged should have empty reasons');
+  assertEqual(entrypointDiff[1].reasons.length, 0, 'Added should have empty reasons');
 });
 
 // Summary
