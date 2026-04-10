@@ -951,6 +951,57 @@ test('detectDuplicateDependencies is critical for large waste', () => {
   assertEqual(dupRule.severity, 'critical', 'Should be critical for >=50KB waste');
 });
 
+// Test comment.js gzip and duplicates
+console.log('\n--- Testing comment.js gzip and duplicates ---');
+
+test('generateComment includes Gzip column in asset table', () => {
+  const { generateComment } = require('../scripts/comment');
+  const analysis = {
+    diff: {
+      baseSize: 500000, prSize: 520000, totalDiff: 20000,
+      baseSizeFormatted: '488.28 KB', prSizeFormatted: '507.81 KB', totalDiffFormatted: '+19.53 KB',
+      nodeModulesDiff: 15000,
+      assetDiff: [
+        { name: 'main.js', baseSize: 100000, prSize: 120000, change: 20000, type: 'changed',
+          changeFormatted: '+19.53 KB', chunkNames: [], chunks: [],
+          baseGzip: 30000, prGzip: 36000, gzipChange: 6000, reasons: [] },
+      ],
+      entrypointDiff: [],
+      baseAssetSize: 100000, prAssetSize: 120000, totalAssetDiff: 20000,
+      prGzipSize: 36000,
+      newDuplicates: [],
+    },
+    summary: {},
+    aiAnalysis: { verdict: 'expected', confidence: 0.9, explanation: 'Test', rootCause: 'Test', suggestedFixes: [] },
+    issues: { violations: [], critical: [], warnings: [], info: [] },
+  };
+  const comment = generateComment(analysis);
+  assertTrue(comment.includes('Gzip'), 'Should have Gzip column header');
+});
+
+test('generateComment includes duplicate dependencies section', () => {
+  const { generateComment } = require('../scripts/comment');
+  const analysis = {
+    diff: {
+      baseSize: 500000, prSize: 520000, totalDiff: 20000,
+      baseSizeFormatted: '488.28 KB', prSizeFormatted: '507.81 KB', totalDiffFormatted: '+19.53 KB',
+      nodeModulesDiff: 15000,
+      assetDiff: [],
+      entrypointDiff: [],
+      prGzipSize: 36000,
+      newDuplicates: [
+        { name: 'lodash', paths: ['node_modules/lodash', 'node_modules/a/node_modules/lodash'], instanceCount: 2, totalSize: 90000, wastedSize: 40000 },
+      ],
+    },
+    summary: {},
+    aiAnalysis: { verdict: 'expected', confidence: 0.9, explanation: 'Test', rootCause: 'Test', suggestedFixes: [] },
+    issues: { violations: [], critical: [], warnings: [], info: [] },
+  };
+  const comment = generateComment(analysis);
+  assertTrue(comment.includes('New Duplicate Dependencies'), 'Should have duplicates section');
+  assertTrue(comment.includes('lodash'), 'Should mention lodash');
+});
+
 // Summary
 console.log('\n--- Test Summary ---');
 console.log(`Tests run: ${testsRun}`);

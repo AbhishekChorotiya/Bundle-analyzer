@@ -68,8 +68,8 @@ function generateComment(analysis, options = {}) {
   if (significantAssets.length > 0) {
     lines.push('### 📁 Output Files');
     lines.push('');
-    lines.push('| Output File | Base | PR | Change | Top Contributors |');
-    lines.push('|-------------|------|-----|--------|-----------------|');
+    lines.push('| Output File | Base | PR | Gzip | Change | Top Contributors |');
+    lines.push('|-------------|------|-----|------|--------|-----------------|');
 
     for (const asset of significantAssets) {
       const baseSizeStr = asset.baseSize > 0 ? formatBytes(asset.baseSize) : '-';
@@ -83,7 +83,8 @@ function generateComment(analysis, options = {}) {
         changeStr = renderSizeChange(asset.change, formatBytes(asset.change, { signed: true }));
       }
       const reasonsStr = formatAssetReasons(asset);
-      lines.push(`| \`${truncate(asset.name, 40)}\` | ${baseSizeStr} | ${prSizeStr} | ${changeStr} | ${reasonsStr} |`);
+      const gzipStr = asset.prGzip > 0 ? formatBytes(asset.prGzip) : '-';
+      lines.push(`| \`${truncate(asset.name, 40)}\` | ${baseSizeStr} | ${prSizeStr} | ${gzipStr} | ${changeStr} | ${reasonsStr} |`);
     }
 
     // Show total asset size summary
@@ -91,7 +92,7 @@ function generateComment(analysis, options = {}) {
     const prAssetSize = diff.prAssetSize || 0;
     const totalAssetDiff = diff.totalAssetDiff || (prAssetSize - baseAssetSize);
     if (baseAssetSize > 0 || prAssetSize > 0) {
-      lines.push(`| **Total** | **${formatBytes(baseAssetSize)}** | **${formatBytes(prAssetSize)}** | **${renderSizeChange(totalAssetDiff, formatBytes(totalAssetDiff, { signed: true }))}** | |`);
+      lines.push(`| **Total** | **${formatBytes(baseAssetSize)}** | **${formatBytes(prAssetSize)}** | **${diff.prGzipSize ? formatBytes(diff.prGzipSize) : '-'}** | **${renderSizeChange(totalAssetDiff, formatBytes(totalAssetDiff, { signed: true }))}** | |`);
     }
 
     lines.push('');
@@ -105,8 +106,8 @@ function generateComment(analysis, options = {}) {
     lines.push('<details>');
     lines.push('<summary><b>🚪 Entrypoint Changes</b></summary>');
     lines.push('');
-    lines.push('| Entrypoint | Base | PR | Change | Top Contributors |');
-    lines.push('|------------|------|-----|--------|-----------------|');
+    lines.push('| Entrypoint | Base | PR | Gzip | Change | Top Contributors |');
+    lines.push('|------------|------|-----|------|--------|-----------------|');
 
     for (const ep of significantEntrypoints) {
       const baseSizeStr = ep.baseSize > 0 ? formatBytes(ep.baseSize) : '-';
@@ -120,7 +121,27 @@ function generateComment(analysis, options = {}) {
         changeStr = renderSizeChange(ep.change, formatBytes(ep.change, { signed: true }));
       }
       const reasonsStr = formatAssetReasons(ep);
-      lines.push(`| \`${ep.name}\` | ${baseSizeStr} | ${prSizeStr} | ${changeStr} | ${reasonsStr} |`);
+      const gzipStr = ep.prGzip > 0 ? formatBytes(ep.prGzip) : '-';
+      lines.push(`| \`${ep.name}\` | ${baseSizeStr} | ${prSizeStr} | ${gzipStr} | ${changeStr} | ${reasonsStr} |`);
+    }
+
+    lines.push('');
+    lines.push('</details>');
+    lines.push('');
+  }
+
+  // New Duplicate Dependencies section
+  const newDuplicates = diff.newDuplicates || [];
+  if (newDuplicates.length > 0) {
+    lines.push('<details>');
+    lines.push('<summary><b>⚠️ New Duplicate Dependencies</b></summary>');
+    lines.push('');
+    lines.push('| Package | Copies | Wasted | Paths |');
+    lines.push('|---------|--------|--------|-------|');
+
+    for (const dup of newDuplicates) {
+      const pathsStr = dup.paths.map(p => `\`${p}\``).join(', ');
+      lines.push(`| \`${dup.name}\` | ${dup.instanceCount} | ${formatBytes(dup.wastedSize)} | ${pathsStr} |`);
     }
 
     lines.push('');
