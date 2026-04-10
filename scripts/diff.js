@@ -123,6 +123,10 @@ function generateReport(diff, summary, options = {}) {
         changeStr = `(${formatBytes(ep.change, { signed: true })})`;
       }
       lines.push(`${symbol} ${ep.name}  ${baseSizeStr} → ${prSizeStr}  ${changeStr}`);
+      const reasonsStr = formatAssetReasonsText(ep);
+      if (reasonsStr) {
+        lines.push(`    Contributors: ${reasonsStr}`);
+      }
     }
     lines.push('');
   }

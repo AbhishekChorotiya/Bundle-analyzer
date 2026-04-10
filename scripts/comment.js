@@ -105,8 +105,8 @@ function generateComment(analysis, options = {}) {
     lines.push('<details>');
     lines.push('<summary><b>🚪 Entrypoint Changes</b></summary>');
     lines.push('');
-    lines.push('| Entrypoint | Base | PR | Change |');
-    lines.push('|------------|------|-----|--------|');
+    lines.push('| Entrypoint | Base | PR | Change | Top Contributors |');
+    lines.push('|------------|------|-----|--------|-----------------|');
 
     for (const ep of significantEntrypoints) {
       const baseSizeStr = ep.baseSize > 0 ? formatBytes(ep.baseSize) : '-';
@@ -119,7 +119,8 @@ function generateComment(analysis, options = {}) {
       } else {
         changeStr = renderSizeChange(ep.change, formatBytes(ep.change, { signed: true }));
       }
-      lines.push(`| \`${ep.name}\` | ${baseSizeStr} | ${prSizeStr} | ${changeStr} |`);
+      const reasonsStr = formatAssetReasons(ep);
+      lines.push(`| \`${ep.name}\` | ${baseSizeStr} | ${prSizeStr} | ${changeStr} | ${reasonsStr} |`);
     }
 
     lines.push('');

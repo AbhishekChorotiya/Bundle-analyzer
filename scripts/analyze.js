@@ -257,6 +257,11 @@ function generateAnalysisReport(diff, detections, aiResult, context) {
       if (ep.prAssets && ep.prAssets.length > 0) {
         lines.push(`    Assets: ${ep.prAssets.join(', ')}`);
       }
+      const reasons = ep.reasons || [];
+      if (reasons.length > 0 && ep.type === 'changed') {
+        const reasonStr = reasons.map(r => `${r.name} (${r.changeFormatted})`).join(', ');
+        lines.push(`    Contributors: ${reasonStr}`);
+      }
     }
     lines.push('');
   }
@@ -366,6 +371,12 @@ function generateJSONOutput(analysis) {
         change: e.change,
         baseAssets: e.baseAssets || [],
         prAssets: e.prAssets || [],
+        reasons: (e.reasons || []).map(r => ({
+          name: r.name,
+          change: r.change,
+          changeFormatted: r.changeFormatted,
+          type: r.type,
+        })),
       })),
     },
   };
