@@ -270,6 +270,32 @@ test('computeEntrypointDiff detects new entrypoints', () => {
   assertEqual(unchanged.length, 1, 'Should have 1 unchanged entrypoint');
 });
 
+test('computeAssetDiff includes gzip sizes on AssetChange', () => {
+  const baseAssets = [
+    { name: 'main.js', size: 100000, chunkNames: [], chunks: [0], compressed: { gzip: 30000, brotli: 25000 } },
+  ];
+  const prAssets = [
+    { name: 'main.js', size: 120000, chunkNames: [], chunks: [0], compressed: { gzip: 36000, brotli: 30000 } },
+  ];
+  const result = computeAssetDiff(baseAssets, prAssets);
+  const main = result.find(a => a.name === 'main.js');
+  assertEqual(main.baseGzip, 30000, 'Should have base gzip');
+  assertEqual(main.prGzip, 36000, 'Should have PR gzip');
+  assertEqual(main.gzipChange, 6000, 'Should compute gzip diff');
+});
+
+test('computeAssetDiff has zero gzip for new assets base', () => {
+  const baseAssets = [];
+  const prAssets = [
+    { name: 'new.js', size: 50000, chunkNames: [], chunks: [0], compressed: { gzip: 15000, brotli: 12500 } },
+  ];
+  const result = computeAssetDiff(baseAssets, prAssets);
+  const newAsset = result.find(a => a.name === 'new.js');
+  assertEqual(newAsset.baseGzip, 0, 'New asset base gzip should be 0');
+  assertEqual(newAsset.prGzip, 15000, 'New asset PR gzip should be set');
+  assertEqual(newAsset.gzipChange, 15000, 'New asset gzip change should equal PR gzip');
+});
+
 test('buildChunkToAssetsMap maps chunk IDs to deliverable asset filenames', () => {
   const sampleStats = JSON.parse(fs.readFileSync(path.join(__dirname, 'sample-base-stats.json'), 'utf-8'));
   const map = buildChunkToAssetsMap(sampleStats);
@@ -798,6 +824,20 @@ test('computeDiff produces entrypoint reasons end-to-end', () => {
   assertEqual(appEp.type, 'changed', 'app should be changed');
   assertTrue(Array.isArray(appEp.reasons), 'app should have reasons array');
   // Reasons may be empty if no module changes match app's chunks, but the field must exist
+});
+
+test('computeDiff includes gzip size data', () => {
+  const baseStats = parseStats(JSON.parse(fs.readFileSync(path.join(__dirname, 'sample-base-stats.json'), 'utf-8')));
+  const prStats = parseStats(JSON.parse(fs.readFileSync(path.join(__dirname, 'sample-pr-stats.json'), 'utf-8')));
+  const diff = computeDiff(baseStats, prStats);
+
+  assertTrue(diff.baseGzipSize > 0, 'Base gzip size should be positive');
+  assertTrue(diff.prGzipSize > 0, 'PR gzip size should be positive');
+  assertTrue(diff.prGzipSize > diff.baseGzipSize, 'PR gzip should be larger (PR added assets)');
+
+  const mainAsset = diff.assetDiff.find(a => a.name === 'main.bundle.js');
+  assertTrue(mainAsset.baseGzip > 0, 'Asset should have base gzip');
+  assertTrue(mainAsset.prGzip > 0, 'Asset should have PR gzip');
 });
 
 // Summary
