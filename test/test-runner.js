@@ -878,6 +878,43 @@ test('computeDiff includes gzip size data', () => {
   assertTrue(mainAsset.prGzip > 0, 'Asset should have PR gzip');
 });
 
+// Test computeNewDuplicates
+console.log('\n--- Testing computeNewDuplicates ---');
+
+test('computeNewDuplicates flags only PR-introduced duplicates', () => {
+  const { computeNewDuplicates } = require('../lib/diff-engine');
+  const baseDuplicates = [
+    { name: 'lodash', paths: ['node_modules/lodash', 'node_modules/a/node_modules/lodash'], instanceCount: 2, totalSize: 90000, wastedSize: 40000 },
+  ];
+  const prDuplicates = [
+    { name: 'lodash', paths: ['node_modules/lodash', 'node_modules/a/node_modules/lodash'], instanceCount: 2, totalSize: 90000, wastedSize: 40000 },
+    { name: 'moment', paths: ['node_modules/moment', 'node_modules/b/node_modules/moment'], instanceCount: 2, totalSize: 200000, wastedSize: 95000 },
+  ];
+  const result = computeNewDuplicates(baseDuplicates, prDuplicates);
+  assertEqual(result.length, 1, 'Should only flag moment (new in PR)');
+  assertEqual(result[0].name, 'moment', 'New duplicate should be moment');
+});
+
+test('computeNewDuplicates flags duplicates with more instances in PR', () => {
+  const { computeNewDuplicates } = require('../lib/diff-engine');
+  const baseDuplicates = [
+    { name: 'lodash', paths: ['node_modules/lodash', 'node_modules/a/node_modules/lodash'], instanceCount: 2, totalSize: 90000, wastedSize: 40000 },
+  ];
+  const prDuplicates = [
+    { name: 'lodash', paths: ['node_modules/lodash', 'node_modules/a/node_modules/lodash', 'node_modules/c/node_modules/lodash'], instanceCount: 3, totalSize: 135000, wastedSize: 85000 },
+  ];
+  const result = computeNewDuplicates(baseDuplicates, prDuplicates);
+  assertEqual(result.length, 1, 'Should flag lodash (grew from 2 to 3 instances)');
+  assertEqual(result[0].instanceCount, 3, 'Should have 3 instances');
+});
+
+test('computeNewDuplicates returns empty when no new duplicates', () => {
+  const { computeNewDuplicates } = require('../lib/diff-engine');
+  const same = [{ name: 'lodash', paths: ['a', 'b'], instanceCount: 2, totalSize: 90000, wastedSize: 40000 }];
+  const result = computeNewDuplicates(same, same);
+  assertEqual(result.length, 0, 'Should be empty when same duplicates');
+});
+
 // Summary
 console.log('\n--- Test Summary ---');
 console.log(`Tests run: ${testsRun}`);
