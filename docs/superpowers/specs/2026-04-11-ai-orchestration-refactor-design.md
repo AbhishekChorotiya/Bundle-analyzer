@@ -24,26 +24,28 @@ Phase 1 — Build (max 2 parallel)
   ├── cloneAndBuild(repoUrl, baseRef, "tmp/base") → baseStatsPath
   └── cloneAndBuild(repoUrl, prRef, "tmp/pr")     → prStatsPath
 
-Phase 2 — Analyze (sequential, fast ~ms)
-  ├── runDiff(baseStatsPath, prStatsPath) → { diff, summary, baseStats, prStats }
-  └── runDetection(diff) → detections
+Phase 2 — Analyze (single call, fast ~ms)
+  └── computeAnalysisInputs(baseStatsPath, prStatsPath) → { diff, summary, detections, baseStats, prStats }
 
 Phase 3 — AI (single call, ~30s-5min)
   └── analyzeBundle(client, diff, detections, context) → aiResult
       (or analyzeOffline() if AI unavailable)
 
 Phase 4 — Report (max 3 parallel)
-  ├── generateAnalysisReport(diff, detections, aiResult, context) → textReport
-  ├── generateJSONOutput({ diff, detections, ai: aiResult })      → jsonObject
-  ├── generateComment({ diff, ai: aiResult, detections, summary }) → commentMarkdown
-  └── generateReport(diff, summary) → diffReport
+  ├── generateAnalysisReport(diff, detections, aiResult, context)       → textReport (string)
+  ├── generateJSONOutput({ diff, detections, ai: aiResult })            → jsonObject (Object, needs JSON.stringify for file output)
+  ├── generateComment(analysis, options)                                → commentMarkdown (string)
+  │     where analysis = { diff, ai: aiResult, detections, summary }
+  │     (assembled by orchestrator to match comment.js's expected shape)
+  └── diff.generateReport(diff, summary)                               → diffReport (string)
+        (from scripts/diff.js, not analyze.js's generateAnalysisReport)
 
 Phase 5 — Output (max 3 parallel)
   ├── writeFile(textReport → reports/analyze-report.txt)
-  ├── writeFile(jsonOutput → reports/analyze-output.json)
+  ├── writeFile(JSON.stringify(jsonOutput) → reports/analyze-output.json)
   ├── writeFile(commentMarkdown → reports/comment-report.md)
   ├── writeFile(diffReport → reports/diff-report.txt)
-  └── postComment() if --post-comment flag set
+  └── upsertComment(commentMarkdown, { prNumber }) if --post-comment flag set
 ```
 
 ## Modes
@@ -71,7 +73,6 @@ Build:
   --base <branch>         Base branch (default: main)
   --pr <branch>           PR branch (default: current git branch)
   --repo-url <url>        Git clone URL (or REPO_URL env)
-  --force-build           Skip cache, rebuild
 
 File mode:
   --base-stats <path>     Pre-built base stats JSON
@@ -149,6 +150,8 @@ Returns `{ statsPath: string, cloneDir: string }`.
 
 Uses `execFile` (not `exec`) — no shell injection risk. Webpack uses `spawn` for streaming large stdout.
 
+**Cleanup:** The orchestrator is responsible for cleaning up the `tmp/` directory. It removes `tmp/` at the start of a full-mode run (same as current `run.sh`). Cloned directories are not removed after the run — they can be inspected for debugging. Users can manually delete `tmp/` or it gets cleaned on the next run.
+
 ### `scripts/orchestrate.js`
 
 Single entry point. Merges `run.sh` + `cli.js`. Structure:
@@ -211,11 +214,19 @@ require('./scripts/orchestrate').main();
 ## Error Handling
 
 - **Phase 1 (build):** If either build fails, report the error and exit immediately. No point continuing without both stats files.
+- **Phase 2 (analyze):** Fatal — if `computeAnalysisInputs()` throws (corrupt stats JSON, missing file, detection error), report error and exit. These are synchronous and fast; failure means bad input data.
 - **Phase 3 (AI):** Failure falls back to `analyzeOffline()`. Not fatal — same as current behavior.
-- **Phase 4 (reports):** Failures are collected. If one report fails, others still complete. Failures summarized at the end.
-- **Phase 5 (output):** File write failures are reported but non-fatal for the overall process.
+- **Phase 4 (reports):** The orchestrator wraps each report generator in try/catch before passing to the concurrency pool. Failures are collected (not thrown). All report tasks run to completion. Failures summarized at the end. The pool itself still fail-fast rejects on errors — the try/catch wrapper prevents that from happening.
+- **Phase 5 (output):** Same pattern as Phase 4 — tasks wrapped in try/catch, failures collected, non-fatal.
 - Exit code 1 if critical bundle issues detected (from detections), same as current.
-- Concurrency pool propagates errors — if a task throws, the pool rejects.
+- Concurrency pool propagates errors — if a task throws, the pool rejects. Phases that need collect-errors semantics wrap tasks in try/catch before passing to the pool.
+
+## Intentionally Removed from Pipeline
+
+The current `run.sh` has two steps that are **not** carried forward:
+
+- **Step 6 (CLI report):** `run.sh` runs `cli.js` which calls `runAnalysis()` a 3rd time, producing `cli-with-ai.txt` and `cli-json-output.json`. These are redundant with the text report and JSON output already generated in Phases 4-5. Eliminating this duplicate AI call is a primary goal of this refactor.
+- **Step 8 (test execution):** `run.sh` runs `test/test-runner.js` as part of the pipeline. Tests are a development concern, not a report generation step. They should be run separately (e.g., `node test/test-runner.js`), not as part of every orchestrator run.
 
 ## Logging
 
