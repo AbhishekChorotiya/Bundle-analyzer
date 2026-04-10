@@ -1233,6 +1233,60 @@ test('computeAnalysisInputs: diff and detections are consistent', () => {
   assertTrue(typeof result.summary.direction === 'string', 'summary.direction should be string');
 });
 
+// ─── Orchestrator Tests ────────────────────────────────────────────────────
+const { parseArgs: parseOrchestrateArgs, determineMode: determineOrchestrateMode } = require('../scripts/orchestrate');
+
+test('orchestrate parseArgs: full mode flags', () => {
+  const opts = parseOrchestrateArgs(['--base', 'main', '--pr', 'feat/x', '--repo-url', 'https://github.com/test/repo']);
+  assertEqual(opts.base, 'main');
+  assertEqual(opts.pr, 'feat/x');
+  assertEqual(opts.repoUrl, 'https://github.com/test/repo');
+});
+
+test('orchestrate parseArgs: file mode flags', () => {
+  const opts = parseOrchestrateArgs(['--base-stats', 'base.json', '--pr-stats', 'pr.json']);
+  assertEqual(opts.baseStats, 'base.json');
+  assertEqual(opts.prStats, 'pr.json');
+});
+
+test('orchestrate parseArgs: analysis flags', () => {
+  const opts = parseOrchestrateArgs(['--skip-ai', '--model', 'gpt-4', '--lines', '150']);
+  assertTrue(opts.skipAI === true, 'skipAI should be true');
+  assertEqual(opts.model, 'gpt-4');
+  assertEqual(opts.lines, '150');
+});
+
+test('orchestrate parseArgs: output flags', () => {
+  const opts = parseOrchestrateArgs(['--json', 'out.json', '--comment-file', 'c.md', '--post-comment', '--pr-number', '42', '--output-dir', 'reports2']);
+  assertEqual(opts.json, 'out.json');
+  assertEqual(opts.commentFile, 'c.md');
+  assertTrue(opts.postComment === true);
+  assertEqual(opts.prNumber, '42');
+  assertEqual(opts.outputDir, 'reports2');
+});
+
+test('orchestrate parseArgs: --json without path', () => {
+  const opts = parseOrchestrateArgs(['--json', '--skip-ai']);
+  assertTrue(opts.json === true, '--json without path should be true');
+  assertTrue(opts.skipAI === true);
+});
+
+test('orchestrate determineMode: full mode', () => {
+  assertEqual(determineOrchestrateMode({ base: 'main', pr: 'feat/x', repoUrl: 'url' }), 'full');
+});
+
+test('orchestrate determineMode: file mode', () => {
+  assertEqual(determineOrchestrateMode({ baseStats: 'a.json', prStats: 'b.json' }), 'file');
+});
+
+test('orchestrate determineMode: file mode takes precedence', () => {
+  assertEqual(determineOrchestrateMode({ base: 'main', pr: 'x', baseStats: 'a.json', prStats: 'b.json' }), 'file');
+});
+
+test('orchestrate determineMode: returns null for invalid', () => {
+  assertEqual(determineOrchestrateMode({}), null);
+});
+
 // ─── Clone Builder Tests ───────────────────────────────────────────────────
 const { cloneAndBuild } = require('../lib/clone-builder');
 
