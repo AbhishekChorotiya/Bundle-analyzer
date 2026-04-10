@@ -44,6 +44,12 @@ function assertFalse(value, msg = '') {
   }
 }
 
+const asyncTests = [];
+
+function testAsync(name, fn) {
+  asyncTests.push({ name, fn });
+}
+
 // Run tests
 console.log('Running Bundle AI Tests\n');
 
@@ -1117,13 +1123,100 @@ test('full pipeline: compressed sizes and duplicates flow through computeDiff', 
   assertTrue(newReact !== undefined, 'react duplicate should be new (not in base)');
 });
 
-// Summary
-console.log('\n--- Test Summary ---');
-console.log(`Tests run: ${testsRun}`);
-console.log(`Tests passed: ${testsPassed}`);
-console.log(`Tests failed: ${testsFailed}`);
+// ─── Concurrency Pool Tests ────────────────────────────────────────────────
+const { runWithConcurrency } = require('../lib/concurrency');
 
-if (testsFailed > 0) {
-  process.exit(1);
+testAsync('runWithConcurrency: returns results in order', async () => {
+  const tasks = [
+    () => Promise.resolve('a'),
+    () => Promise.resolve('b'),
+    () => Promise.resolve('c'),
+  ];
+  const results = await runWithConcurrency(tasks, 2);
+  assertEqual(results.length, 3, 'Should have 3 results');
+  assertEqual(results[0], 'a', 'First result');
+  assertEqual(results[1], 'b', 'Second result');
+  assertEqual(results[2], 'c', 'Third result');
+});
+
+testAsync('runWithConcurrency: enforces max concurrency', async () => {
+  let running = 0;
+  let maxRunning = 0;
+
+  const makeTask = (delay) => () => new Promise(resolve => {
+    running++;
+    if (running > maxRunning) maxRunning = running;
+    setTimeout(() => {
+      running--;
+      resolve(delay);
+    }, delay);
+  });
+
+  const tasks = [
+    makeTask(50),
+    makeTask(50),
+    makeTask(50),
+    makeTask(50),
+    makeTask(50),
+  ];
+
+  await runWithConcurrency(tasks, 2);
+  assertTrue(maxRunning <= 2, `Max concurrent should be <= 2, got ${maxRunning}`);
+});
+
+testAsync('runWithConcurrency: propagates errors', async () => {
+  const tasks = [
+    () => Promise.resolve('ok'),
+    () => Promise.reject(new Error('fail')),
+    () => Promise.resolve('ok2'),
+  ];
+
+  let caught = false;
+  try {
+    await runWithConcurrency(tasks, 3);
+  } catch (e) {
+    caught = true;
+    assertEqual(e.message, 'fail', 'Should propagate error message');
+  }
+  assertTrue(caught, 'Should have thrown');
+});
+
+testAsync('runWithConcurrency: handles empty task list', async () => {
+  const results = await runWithConcurrency([], 3);
+  assertEqual(results.length, 0, 'Empty tasks should return empty results');
+});
+
+testAsync('runWithConcurrency: single task works', async () => {
+  const results = await runWithConcurrency([() => Promise.resolve(42)], 3);
+  assertEqual(results.length, 1);
+  assertEqual(results[0], 42);
+});
+
+// Run async tests
+async function runAsyncTests() {
+  for (const { name, fn } of asyncTests) {
+    testsRun++;
+    try {
+      await fn();
+      console.log(`✓ ${name}`);
+      testsPassed++;
+    } catch (error) {
+      console.error(`✗ ${name}`);
+      console.error(`  Error: ${error.message}`);
+      testsFailed++;
+    }
+  }
 }
-console.log('\n✓ All tests passed!');
+
+runAsyncTests().then(() => {
+  // Summary
+  console.log('\n--- Test Summary ---');
+  console.log(`Tests run: ${testsRun}`);
+  console.log(`Tests passed: ${testsPassed}`);
+  console.log(`Tests failed: ${testsFailed}`);
+
+  if (testsFailed > 0) {
+    process.exit(1);
+  }
+  console.log('\n✓ All tests passed!');
+});
