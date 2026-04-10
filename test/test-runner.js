@@ -130,6 +130,52 @@ test('parseEntrypoints handles missing entrypoints gracefully', () => {
   assertEqual(entrypoints.length, 0, 'Should return empty array for missing entrypoints');
 });
 
+test('estimateCompressedSize returns correct gzip/brotli for .js files', () => {
+  const { estimateCompressedSize } = require('../lib/stats-parser');
+  const result = estimateCompressedSize(100000, 'main.bundle.js');
+  assertEqual(result.gzip, 30000, 'JS gzip should be 30% of raw');
+  assertEqual(result.brotli, 25000, 'JS brotli should be 25% of raw');
+});
+
+test('estimateCompressedSize returns correct ratios for .css files', () => {
+  const { estimateCompressedSize } = require('../lib/stats-parser');
+  const result = estimateCompressedSize(100000, 'styles.css');
+  assertEqual(result.gzip, 25000, 'CSS gzip should be 25% of raw');
+  assertEqual(result.brotli, 20000, 'CSS brotli should be 20% of raw');
+});
+
+test('estimateCompressedSize uses default ratios for unknown extensions', () => {
+  const { estimateCompressedSize } = require('../lib/stats-parser');
+  const result = estimateCompressedSize(100000, 'data.bin');
+  assertEqual(result.gzip, 50000, 'Unknown gzip should be 50% of raw');
+  assertEqual(result.brotli, 45000, 'Unknown brotli should be 45% of raw');
+});
+
+test('estimateCompressedSize handles zero size', () => {
+  const { estimateCompressedSize } = require('../lib/stats-parser');
+  const result = estimateCompressedSize(0, 'main.js');
+  assertEqual(result.gzip, 0, 'Zero size gzip should be 0');
+  assertEqual(result.brotli, 0, 'Zero size brotli should be 0');
+});
+
+test('parseEntrypoints computes compressed sizes', () => {
+  const stats = {
+    assets: [
+      { name: 'main.js', size: 100000, chunkNames: ['main'], chunks: [0] },
+      { name: 'vendor.js', size: 50000, chunkNames: ['vendor'], chunks: [1] },
+    ],
+    entrypoints: {
+      app: { assets: [{ name: 'main.js', size: 100000 }, { name: 'vendor.js', size: 50000 }], chunks: [0, 1] },
+    },
+  };
+  const result = parseEntrypoints(stats);
+  assertEqual(result.length, 1, 'Should have 1 entrypoint');
+  assertTrue(result[0].compressed.gzip > 0, 'Gzip should be positive');
+  assertTrue(result[0].compressed.brotli > 0, 'Brotli should be positive');
+  // main.js: 30000 gzip + vendor.js: 15000 gzip = 45000
+  assertEqual(result[0].compressed.gzip, 45000, 'Entrypoint gzip should sum assets');
+});
+
 // Test diff-engine
 console.log('\n--- Testing diff-engine.js ---');
 const { computeDiff, generateSummary, computeAssetDiff, computeEntrypointDiff, computeAssetReasons, computeEntrypointReasons } = require('../lib/diff-engine');
@@ -735,6 +781,23 @@ test('computeEntrypointReasons returns empty reasons for unchanged entrypoints',
 
   assertEqual(entrypointDiff[0].reasons.length, 0, 'Unchanged should have empty reasons');
   assertEqual(entrypointDiff[1].reasons.length, 0, 'Added should have empty reasons');
+});
+
+// Integration test
+console.log('\n--- Integration Tests ---');
+
+test('computeDiff produces entrypoint reasons end-to-end', () => {
+  // Use the sample stats files which now have chunks on entrypoints
+  const baseStats = parseStats(JSON.parse(fs.readFileSync(path.join(__dirname, 'sample-base-stats.json'), 'utf-8')));
+  const prStats = parseStats(JSON.parse(fs.readFileSync(path.join(__dirname, 'sample-pr-stats.json'), 'utf-8')));
+  const diff = computeDiff(baseStats, prStats);
+
+  // app entrypoint should be 'changed' (assetsSize differs: 1769472 vs 2084288)
+  const appEp = diff.entrypointDiff.find(e => e.name === 'app');
+  assertTrue(appEp !== undefined, 'app entrypoint should exist');
+  assertEqual(appEp.type, 'changed', 'app should be changed');
+  assertTrue(Array.isArray(appEp.reasons), 'app should have reasons array');
+  // Reasons may be empty if no module changes match app's chunks, but the field must exist
 });
 
 // Summary
