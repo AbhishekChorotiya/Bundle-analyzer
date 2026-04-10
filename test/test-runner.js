@@ -1048,6 +1048,44 @@ test('generateReport includes duplicate dependencies section', () => {
   assertTrue(report.includes('lodash'), 'Should mention lodash');
 });
 
+// Test analyze.js compressed and duplicates
+console.log('\n--- Testing analyze.js compressed and duplicates ---');
+
+test('generateJSONOutput includes compressed and duplicates fields', () => {
+  const { generateJSONOutput } = require('../scripts/analyze');
+  const analysis = {
+    diff: {
+      baseSize: 500000, prSize: 520000, totalDiff: 20000,
+      totalDiffFormatted: '+19.53 KB', nodeModulesDiff: 15000,
+      baseGzipSize: 150000, prGzipSize: 156000, totalGzipDiff: 6000,
+      topChanges: [], packageDiffs: {},
+      assetDiff: [
+        { name: 'main.js', type: 'changed', baseSize: 100000, prSize: 120000, change: 20000,
+          prGzip: 36000, reasons: [] },
+      ],
+      entrypointDiff: [
+        { name: 'app', type: 'changed', baseSize: 100000, prSize: 120000, change: 20000,
+          prGzip: 36000, baseAssets: [], prAssets: [], reasons: [] },
+      ],
+      baseAssetSize: 100000, prAssetSize: 120000, totalAssetDiff: 20000,
+      baseAssetSizeFormatted: '97.66 KB', prAssetSizeFormatted: '117.19 KB',
+      newDuplicates: [
+        { name: 'lodash', paths: ['a', 'b'], instanceCount: 2, totalSize: 90000, wastedSize: 40000 },
+      ],
+    },
+    detections: { violations: [], critical: [], warnings: [], info: [] },
+    ai: { verdict: 'expected', confidence: 0.9, explanation: 'Test', rootCause: 'Test', suggestedFixes: [] },
+  };
+  const json = generateJSONOutput(analysis);
+  assertTrue(json.compressed !== undefined, 'Should have compressed field');
+  assertEqual(json.compressed.prGzipTotal, 156000, 'Should have PR gzip total');
+  assertTrue(json.duplicates !== undefined, 'Should have duplicates field');
+  assertEqual(json.duplicates.new.length, 1, 'Should have 1 new duplicate');
+  assertEqual(json.duplicates.new[0].name, 'lodash', 'Duplicate should be lodash');
+  assertEqual(json.assets.changes[0].gzipSize, 36000, 'Asset should have gzipSize');
+  assertEqual(json.entrypoints.changes[0].gzipSize, 36000, 'Entrypoint should have gzipSize');
+});
+
 // Summary
 console.log('\n--- Test Summary ---');
 console.log(`Tests run: ${testsRun}`);

@@ -225,6 +225,9 @@ function generateAnalysisReport(diff, detections, aiResult, context) {
         const reasonStr = reasons.map(r => `${r.name} (${r.changeFormatted})`).join(', ');
         lines.push(`    Contributors: ${reasonStr}`);
       }
+      if (asset.prGzip > 0) {
+        lines.push(`    Gzip: ~${formatBytes(asset.prGzip)}`);
+      }
     }
 
     if (changedAssets.length > 20) {
@@ -262,6 +265,20 @@ function generateAnalysisReport(diff, detections, aiResult, context) {
         const reasonStr = reasons.map(r => `${r.name} (${r.changeFormatted})`).join(', ');
         lines.push(`    Contributors: ${reasonStr}`);
       }
+    }
+    lines.push('');
+  }
+
+  // Duplicate Dependencies
+  const newDuplicates = diff.newDuplicates || [];
+  if (newDuplicates.length > 0) {
+    lines.push('⚠️ NEW DUPLICATE DEPENDENCIES');
+    lines.push('─'.repeat(60));
+
+    for (const dup of newDuplicates) {
+      const severity = dup.wastedSize >= 50 * 1024 ? '‼' : '⚠';
+      lines.push(`  ${severity} ${dup.name} — ${dup.instanceCount} copies, ${formatBytes(dup.wastedSize)} wasted`);
+      lines.push(`    Paths: ${dup.paths.join(', ')}`);
     }
     lines.push('');
   }
@@ -354,6 +371,7 @@ function generateJSONOutput(analysis) {
         baseSize: a.baseSize,
         prSize: a.prSize,
         change: a.change,
+        gzipSize: a.prGzip || 0,
         reasons: (a.reasons || []).map(r => ({
           name: r.name,
           change: r.change,
@@ -369,6 +387,7 @@ function generateJSONOutput(analysis) {
         baseSize: e.baseSize,
         prSize: e.prSize,
         change: e.change,
+        gzipSize: e.prGzip || 0,
         baseAssets: e.baseAssets || [],
         prAssets: e.prAssets || [],
         reasons: (e.reasons || []).map(r => ({
@@ -377,6 +396,19 @@ function generateJSONOutput(analysis) {
           changeFormatted: r.changeFormatted,
           type: r.type,
         })),
+      })),
+    },
+    compressed: {
+      baseGzipTotal: diff.baseGzipSize || 0,
+      prGzipTotal: diff.prGzipSize || 0,
+      gzipDiff: diff.totalGzipDiff || 0,
+    },
+    duplicates: {
+      new: (diff.newDuplicates || []).map(d => ({
+        name: d.name,
+        copies: d.instanceCount,
+        wastedSize: d.wastedSize,
+        paths: d.paths,
       })),
     },
   };
