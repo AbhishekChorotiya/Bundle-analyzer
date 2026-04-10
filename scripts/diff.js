@@ -87,7 +87,11 @@ function generateReport(diff, summary, options = {}) {
         changeStr = `(${formatBytes(asset.change, { signed: true })})`;
       }
       const reasonsStr = formatAssetReasonsText(asset);
-      lines.push(`${symbol} ${asset.name}  ${baseSizeStr} → ${prSizeStr}  ${changeStr}`);
+      let assetLine = `${symbol} ${asset.name}  ${baseSizeStr} → ${prSizeStr}  ${changeStr}`;
+      if (asset.prGzip > 0) {
+        assetLine += ` [gzip: ${formatBytes(asset.prGzip)}]`;
+      }
+      lines.push(assetLine);
       if (reasonsStr) {
         lines.push(`    Contributors: ${reasonsStr}`);
       }
@@ -122,11 +126,28 @@ function generateReport(diff, summary, options = {}) {
         symbol = '~';
         changeStr = `(${formatBytes(ep.change, { signed: true })})`;
       }
-      lines.push(`${symbol} ${ep.name}  ${baseSizeStr} → ${prSizeStr}  ${changeStr}`);
+      let epLine = `${symbol} ${ep.name}  ${baseSizeStr} → ${prSizeStr}  ${changeStr}`;
+      if (ep.prGzip > 0) {
+        epLine += ` [gzip: ${formatBytes(ep.prGzip)}]`;
+      }
+      lines.push(epLine);
       const reasonsStr = formatAssetReasonsText(ep);
       if (reasonsStr) {
         lines.push(`    Contributors: ${reasonsStr}`);
       }
+    }
+    lines.push('');
+  }
+
+  // Duplicate Dependencies
+  const newDuplicates = diff.newDuplicates || [];
+  if (newDuplicates.length > 0) {
+    lines.push('## Duplicate Dependencies (New in PR)');
+    lines.push('');
+    for (const dup of newDuplicates) {
+      const severity = dup.wastedSize >= 50 * 1024 ? '‼' : '⚠';
+      lines.push(`  ${severity} ${dup.name} — ${dup.instanceCount} copies, ${formatBytes(dup.wastedSize)} wasted`);
+      lines.push(`    Paths: ${dup.paths.join(', ')}`);
     }
     lines.push('');
   }

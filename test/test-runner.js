@@ -1002,6 +1002,52 @@ test('generateComment includes duplicate dependencies section', () => {
   assertTrue(comment.includes('lodash'), 'Should mention lodash');
 });
 
+// Test diff.js gzip and duplicates
+console.log('\n--- Testing diff.js gzip and duplicates ---');
+
+test('generateReport includes gzip sizes in asset lines', () => {
+  const { generateReport } = require('../scripts/diff');
+  const diff = {
+    baseSize: 500000, prSize: 520000, totalDiff: 20000,
+    baseSizeFormatted: '488.28 KB', prSizeFormatted: '507.81 KB', totalDiffFormatted: '+19.53 KB',
+    nodeModulesDiff: 15000,
+    assetDiff: [
+      { name: 'main.js', baseSize: 100000, prSize: 120000, change: 20000, type: 'changed',
+        changeFormatted: '+19.53 KB', chunkNames: [], chunks: [],
+        baseGzip: 30000, prGzip: 36000, gzipChange: 6000, reasons: [] },
+    ],
+    entrypointDiff: [],
+    baseAssetSize: 100000, prAssetSize: 120000, totalAssetDiff: 20000,
+    prGzipSize: 36000,
+    newDuplicates: [],
+    topChanges: [], added: [], removed: [], allChanges: [],
+    packageDiffs: {},
+  };
+  const summary = { isSignificant: false };
+  const report = generateReport(diff, summary);
+  assertTrue(report.includes('[gzip:'), 'Should have gzip annotation in asset lines');
+});
+
+test('generateReport includes duplicate dependencies section', () => {
+  const { generateReport } = require('../scripts/diff');
+  const diff = {
+    baseSize: 500000, prSize: 520000, totalDiff: 20000,
+    baseSizeFormatted: '488.28 KB', prSizeFormatted: '507.81 KB', totalDiffFormatted: '+19.53 KB',
+    nodeModulesDiff: 15000,
+    assetDiff: [],
+    entrypointDiff: [],
+    newDuplicates: [
+      { name: 'lodash', paths: ['node_modules/lodash', 'node_modules/a/node_modules/lodash'], instanceCount: 2, totalSize: 90000, wastedSize: 40000 },
+    ],
+    topChanges: [], added: [], removed: [], allChanges: [],
+    packageDiffs: {},
+  };
+  const summary = { isSignificant: false };
+  const report = generateReport(diff, summary);
+  assertTrue(report.includes('Duplicate Dependencies'), 'Should have duplicates section');
+  assertTrue(report.includes('lodash'), 'Should mention lodash');
+});
+
 // Summary
 console.log('\n--- Test Summary ---');
 console.log(`Tests run: ${testsRun}`);
