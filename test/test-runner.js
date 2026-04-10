@@ -1192,6 +1192,47 @@ testAsync('runWithConcurrency: single task works', async () => {
   assertEqual(results[0], 42);
 });
 
+// ─── computeAnalysisInputs Tests ───────────────────────────────────────────
+const { computeAnalysisInputs } = require('../scripts/analyze');
+
+test('computeAnalysisInputs: returns correct shape', () => {
+  const baseStatsPath = path.join(__dirname, 'sample-base-stats.json');
+  const prStatsPath = path.join(__dirname, 'sample-pr-stats.json');
+  const result = computeAnalysisInputs(baseStatsPath, prStatsPath);
+
+  // Check all expected fields exist
+  assertTrue(result.diff !== undefined, 'Should have diff');
+  assertTrue(result.summary !== undefined, 'Should have summary');
+  assertTrue(result.detections !== undefined, 'Should have detections');
+  assertTrue(result.baseStats !== undefined, 'Should have baseStats');
+  assertTrue(result.prStats !== undefined, 'Should have prStats');
+
+  // Check diff has expected properties
+  assertTrue(typeof result.diff.baseSize === 'number', 'diff.baseSize should be number');
+  assertTrue(typeof result.diff.prSize === 'number', 'diff.prSize should be number');
+  assertTrue(typeof result.diff.totalDiff === 'number', 'diff.totalDiff should be number');
+  assertTrue(Array.isArray(result.diff.allChanges), 'diff.allChanges should be array');
+  assertTrue(Array.isArray(result.diff.topChanges), 'diff.topChanges should be array');
+
+  // Check detections has expected properties
+  assertTrue(Array.isArray(result.detections.violations), 'detections.violations should be array');
+  assertTrue(Array.isArray(result.detections.critical), 'detections.critical should be array');
+  assertTrue(Array.isArray(result.detections.warnings), 'detections.warnings should be array');
+});
+
+test('computeAnalysisInputs: diff and detections are consistent', () => {
+  const baseStatsPath = path.join(__dirname, 'sample-base-stats.json');
+  const prStatsPath = path.join(__dirname, 'sample-pr-stats.json');
+  const result = computeAnalysisInputs(baseStatsPath, prStatsPath);
+
+  // The diff totalDiff should be prSize - baseSize
+  assertEqual(result.diff.totalDiff, result.diff.prSize - result.diff.baseSize,
+    'totalDiff should equal prSize - baseSize');
+
+  // Summary should have a direction string
+  assertTrue(typeof result.summary.direction === 'string', 'summary.direction should be string');
+});
+
 // ─── Clone Builder Tests ───────────────────────────────────────────────────
 const { cloneAndBuild } = require('../lib/clone-builder');
 

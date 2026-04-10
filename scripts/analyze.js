@@ -14,6 +14,20 @@ const { createClient, analyzeBundle, analyzeOffline, isAIAvailable } = require('
 const { runDiff } = require('./diff');
 
 /**
+ * Compute diff and run detection rules — the non-AI steps of analysis.
+ * Used by the orchestrator to separate data computation from AI + report generation.
+ * @param {string} baseStatsPath - Path to base stats
+ * @param {string} prStatsPath - Path to PR stats
+ * @param {Object} options
+ * @returns {Object} { diff, summary, detections, baseStats, prStats }
+ */
+function computeAnalysisInputs(baseStatsPath, prStatsPath, options = {}) {
+  const { diff, summary, baseStats, prStats } = runDiff(baseStatsPath, prStatsPath, { ...options, silent: true });
+  const detections = runDetection(diff, { baseStats: diff.baseStats });
+  return { diff, summary, detections, baseStats, prStats };
+}
+
+/**
  * Run full analysis on bundle stats
  * @param {string} baseStatsPath - Path to base stats
  * @param {string} prStatsPath - Path to PR stats
@@ -566,6 +580,7 @@ Options:
 
 module.exports = {
   runAnalysis,
+  computeAnalysisInputs,
   generateAnalysisReport,
   generateJSONOutput,
 };
