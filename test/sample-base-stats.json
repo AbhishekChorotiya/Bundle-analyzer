@@ -16,8 +16,38 @@
       "size": 1245184,
       "chunks": [0],
       "chunkNames": ["main"]
+    },
+    {
+      "name": "vendor.bundle.js",
+      "size": 524288,
+      "chunks": [1],
+      "chunkNames": ["vendor"]
+    },
+    {
+      "name": "main.bundle.js.map",
+      "size": 4000000,
+      "chunks": [0],
+      "chunkNames": ["main"]
+    },
+    {
+      "name": "main.bundle.js.LICENSE.txt",
+      "size": 2048,
+      "chunks": [0],
+      "chunkNames": ["main"]
     }
   ],
+  "entrypoints": {
+    "app": {
+      "assets": ["vendor.bundle.js", "main.bundle.js"],
+      "assetsSize": 1769472,
+      "chunks": [0, 1]
+    },
+    "HyperLoader": {
+      "assets": ["vendor.bundle.js"],
+      "assetsSize": 524288,
+      "chunks": [1]
+    }
+  },
   "chunks": [
     {
       "id": 0,
@@ -27,6 +57,16 @@
       "size": 1245184,
       "names": ["main"],
       "files": ["main.bundle.js"],
+      "modules": []
+    },
+    {
+      "id": 1,
+      "rendered": true,
+      "initial": true,
+      "entry": false,
+      "size": 524288,
+      "names": ["vendor"],
+      "files": ["vendor.bundle.js"],
       "modules": []
     }
   ],
@@ -135,6 +175,12 @@
     "main": {
       "chunks": [0],
       "assets": ["main.bundle.js"],
+      "children": {},
+      "childAssets": {}
+    },
+    "vendor": {
+      "chunks": [1],
+      "assets": ["vendor.bundle.js"],
       "children": {},
       "childAssets": {}
     }

@@ -16,8 +16,49 @@
       "size": 1560000,
       "chunks": [0],
       "chunkNames": ["main"]
+    },
+    {
+      "name": "vendor.bundle.js",
+      "size": 524288,
+      "chunks": [1],
+      "chunkNames": ["vendor"]
+    },
+    {
+      "name": "sw.bundle.js",
+      "size": 65536,
+      "chunks": [2],
+      "chunkNames": ["hs-sdk-sw"]
+    },
+    {
+      "name": "main.bundle.js.map",
+      "size": 4500000,
+      "chunks": [0],
+      "chunkNames": ["main"]
+    },
+    {
+      "name": "sw.bundle.js.LICENSE.txt",
+      "size": 512,
+      "chunks": [2],
+      "chunkNames": ["hs-sdk-sw"]
     }
   ],
+  "entrypoints": {
+    "app": {
+      "assets": ["vendor.bundle.js", "main.bundle.js"],
+      "assetsSize": 2084288,
+      "chunks": [0, 1]
+    },
+    "HyperLoader": {
+      "assets": ["vendor.bundle.js"],
+      "assetsSize": 524288,
+      "chunks": [1]
+    },
+    "hs-sdk-sw": {
+      "assets": ["sw.bundle.js"],
+      "assetsSize": 65536,
+      "chunks": [2]
+    }
+  },
   "chunks": [
     {
       "id": 0,
@@ -27,6 +68,26 @@
       "size": 1560000,
       "names": ["main"],
       "files": ["main.bundle.js"],
+      "modules": []
+    },
+    {
+      "id": 1,
+      "rendered": true,
+      "initial": true,
+      "entry": false,
+      "size": 524288,
+      "names": ["vendor"],
+      "files": ["vendor.bundle.js"],
+      "modules": []
+    },
+    {
+      "id": 2,
+      "rendered": true,
+      "initial": true,
+      "entry": true,
+      "size": 65536,
+      "names": ["hs-sdk-sw"],
+      "files": ["sw.bundle.js"],
       "modules": []
     }
   ],
@@ -183,12 +244,33 @@
         }
       ],
       "usedExports": false
+    },
+    {
+      "id": 9,
+      "identifier": "/project/src/sw/service-worker.js",
+      "name": "./src/sw/service-worker.js",
+      "size": 4096,
+      "chunks": [2],
+      "reasons": [],
+      "usedExports": true
     }
   ],
   "namedChunkGroups": {
     "main": {
       "chunks": [0],
       "assets": ["main.bundle.js"],
+      "children": {},
+      "childAssets": {}
+    },
+    "vendor": {
+      "chunks": [1],
+      "assets": ["vendor.bundle.js"],
+      "children": {},
+      "childAssets": {}
+    },
+    "hs-sdk-sw": {
+      "chunks": [2],
+      "assets": ["sw.bundle.js"],
       "children": {},
       "childAssets": {}
     }

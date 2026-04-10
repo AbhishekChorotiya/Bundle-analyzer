@@ -580,6 +580,63 @@ test('parseStats throws on invalid input', () => {
   assertTrue(threw, 'Should throw on non-array modules');
 });
 
+test('parseAssets extracts chunks (numeric IDs) from assets', () => {
+  const stats = {
+    assets: [
+      { name: 'app.js', size: 1000, chunks: [0, 1], chunkNames: ['main'] },
+      { name: 'index.html', size: 500, chunks: [0], chunkNames: [] },
+      { name: 'app.js.map', size: 5000, chunks: [0], chunkNames: ['main'] },
+    ],
+  };
+  const assets = parseAssets(stats);
+  assertEqual(assets.length, 2, 'Should filter out .map files');
+  // app.js is larger, sorted first
+  assertEqual(assets[0].name, 'app.js');
+  assertEqual(assets[0].chunks.length, 2, 'app.js should have 2 chunk IDs');
+  assertEqual(assets[0].chunks[0], 0);
+  assertEqual(assets[0].chunks[1], 1);
+  assertEqual(assets[1].name, 'index.html');
+  assertEqual(assets[1].chunks.length, 1, 'index.html should have 1 chunk ID');
+  assertEqual(assets[1].chunks[0], 0);
+});
+
+test('parseEntrypoints extracts chunks array from entrypoints', () => {
+  const stats = {
+    entrypoints: {
+      app: {
+        assets: [{ name: 'app.js', size: 1000 }],
+        assetsSize: 1000,
+        chunks: [0, 1],
+      },
+      loader: {
+        assets: [{ name: 'loader.js', size: 500 }],
+        assetsSize: 500,
+        chunks: [2],
+      },
+      legacy: {
+        assets: [{ name: 'legacy.js', size: 300 }],
+        assetsSize: 300,
+        // No chunks field — should default to []
+      },
+    },
+    assets: [],
+  };
+  const entrypoints = parseEntrypoints(stats);
+  assertEqual(entrypoints.length, 3);
+
+  const app = entrypoints.find(e => e.name === 'app');
+  assertEqual(app.chunks.length, 2, 'app should have 2 chunk IDs');
+  assertEqual(app.chunks[0], 0);
+  assertEqual(app.chunks[1], 1);
+
+  const loader = entrypoints.find(e => e.name === 'loader');
+  assertEqual(loader.chunks.length, 1, 'loader should have 1 chunk ID');
+  assertEqual(loader.chunks[0], 2);
+
+  const legacy = entrypoints.find(e => e.name === 'legacy');
+  assertEqual(legacy.chunks.length, 0, 'legacy should have 0 chunk IDs');
+});
+
 // Summary
 console.log('\n--- Test Summary ---');
 console.log(`Tests run: ${testsRun}`);
