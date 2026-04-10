@@ -637,6 +637,59 @@ test('parseEntrypoints extracts chunks array from entrypoints', () => {
   assertEqual(legacy.chunks.length, 0, 'legacy should have 0 chunk IDs');
 });
 
+test('computeAssetDiff includes chunks on AssetChange objects', () => {
+  const baseAssets = [
+    { name: 'app.js', size: 1000, chunkNames: ['main'], chunks: [0] },
+  ];
+  const prAssets = [
+    { name: 'app.js', size: 1200, chunkNames: ['main'], chunks: [0, 3] },
+    { name: 'index.html', size: 500, chunkNames: [], chunks: [0] },
+  ];
+  const diff = computeAssetDiff(baseAssets, prAssets);
+
+  const appChange = diff.find(a => a.name === 'app.js');
+  assertEqual(appChange.type, 'changed');
+  // Chunks should be union of base [0] and PR [0, 3] = [0, 3]
+  assertTrue(appChange.chunks.includes(0), 'Should include chunk 0');
+  assertTrue(appChange.chunks.includes(3), 'Should include chunk 3');
+
+  const htmlChange = diff.find(a => a.name === 'index.html');
+  assertEqual(htmlChange.type, 'added');
+  assertTrue(htmlChange.chunks.includes(0), 'HTML asset should have chunk 0');
+});
+
+test('computeAssetReasons uses asset-level chunks as fallback', () => {
+  // HTML asset not in chunkToAssets map, but has chunks on the asset object
+  const assetDiff = [
+    {
+      name: 'index.html',
+      baseSize: 500,
+      prSize: 520,
+      change: 20,
+      type: 'changed',
+      chunkNames: [],
+      chunks: [0],  // This is the fallback source
+    },
+  ];
+  const moduleChanges = [
+    { name: 'src/App.js', change: 15, chunks: [0], packageName: null },
+    { name: 'node_modules/react/index.js', change: 5, chunks: [0], packageName: 'react' },
+    { name: 'src/Other.js', change: 100, chunks: [1], packageName: null },  // Different chunk
+  ];
+  // Empty chunkToAssets — simulates HTML not being in stats.chunks[].files
+  const baseChunkToAssets = {};
+  const prChunkToAssets = {};
+
+  computeAssetReasons(assetDiff, moduleChanges, baseChunkToAssets, prChunkToAssets);
+
+  const html = assetDiff[0];
+  assertEqual(html.reasons.length, 2, 'Should have 2 contributors from chunk 0');
+  assertEqual(html.reasons[0].name, 'src/App.js', 'First contributor should be src/App.js');
+  assertEqual(html.reasons[0].change, 15);
+  assertEqual(html.reasons[1].name, 'react', 'Second should be react package');
+  assertEqual(html.reasons[1].change, 5);
+});
+
 // Summary
 console.log('\n--- Test Summary ---');
 console.log(`Tests run: ${testsRun}`);
