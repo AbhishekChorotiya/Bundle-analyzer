@@ -9,27 +9,36 @@
  *   File:  node orchestrate.js --base-stats base.json --pr-stats pr.json
  */
 
-const fs = require('fs');
-const path = require('path');
-const { loadEnv } = require('../lib/utils');
-const { runWithConcurrency } = require('../lib/concurrency');
-const { cloneAndBuild } = require('../lib/clone-builder');
-const { computeAnalysisInputs, generateAnalysisReport, generateJSONOutput } = require('./analyze');
-const { generateComment, upsertComment } = require('./comment');
-const { generateReport: generateDiffReport } = require('./diff');
-const { createClient, analyzeBundle, analyzeOffline, isAIAvailable } = require('../lib/ai-client');
+const fs = require("fs");
+const path = require("path");
+const { loadEnv } = require("../lib/utils");
+const { runWithConcurrency } = require("../lib/concurrency");
+const { cloneAndBuild } = require("../lib/clone-builder");
+const {
+  computeAnalysisInputs,
+  generateAnalysisReport,
+  generateJSONOutput,
+} = require("./analyze");
+const { generateComment, upsertComment } = require("./comment");
+const { generateReport: generateDiffReport } = require("./diff");
+const {
+  createClient,
+  analyzeBundle,
+  analyzeOffline,
+  isAIAvailable,
+} = require("../lib/ai-client");
 
-loadEnv(path.join(__dirname, '..', '.env'));
+loadEnv(path.join(__dirname, "..", ".env"));
 
 // ── Colors (only on TTY) ─────────────────────────────────────────────────
 const isTTY = process.stdout.isTTY === true;
 const C = {
-  bold: isTTY ? '\x1b[1m' : '',
-  cyan: isTTY ? '\x1b[36m' : '',
-  green: isTTY ? '\x1b[32m' : '',
-  yellow: isTTY ? '\x1b[33m' : '',
-  red: isTTY ? '\x1b[31m' : '',
-  reset: isTTY ? '\x1b[0m' : '',
+  bold: isTTY ? "\x1b[1m" : "",
+  cyan: isTTY ? "\x1b[36m" : "",
+  green: isTTY ? "\x1b[32m" : "",
+  yellow: isTTY ? "\x1b[33m" : "",
+  red: isTTY ? "\x1b[31m" : "",
+  reset: isTTY ? "\x1b[0m" : "",
 };
 
 /**
@@ -39,47 +48,84 @@ const C = {
  */
 function parseArgs(args) {
   const options = {
-    base: 'main',
-    model: 'kimi-latest',
+    base: "main",
+    model: "kimi-latest",
   };
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     const next = () => {
-      if (!args[i + 1] || args[i + 1].startsWith('-')) return null;
+      if (!args[i + 1] || args[i + 1].startsWith("-")) return null;
       return args[++i];
     };
 
     switch (arg) {
       // Build mode
-      case '--base': case '-b': options.base = args[++i]; break;
-      case '--pr': case '-p': options.pr = args[++i]; break;
-      case '--repo-url': options.repoUrl = args[++i]; break;
+      case "--base":
+      case "-b":
+        options.base = args[++i];
+        break;
+      case "--pr":
+      case "-p":
+        options.pr = args[++i];
+        break;
+      case "--repo-url":
+        options.repoUrl = args[++i];
+        break;
 
       // File mode
-      case '--base-stats': options.baseStats = args[++i]; break;
-      case '--pr-stats': options.prStats = args[++i]; break;
+      case "--base-stats":
+        options.baseStats = args[++i];
+        break;
+      case "--pr-stats":
+        options.prStats = args[++i];
+        break;
 
       // Analysis
-      case '--skip-ai': options.skipAI = true; break;
-      case '--model': case '-m': options.model = args[++i]; break;
-      case '--lines': case '-l': options.lines = args[++i]; break;
+      case "--skip-ai":
+        options.skipAI = true;
+        break;
+      case "--model":
+      case "-m":
+        options.model = args[++i];
+        break;
+      case "--lines":
+      case "-l":
+        options.lines = args[++i];
+        break;
 
       // Output
-      case '--json': case '-j': {
+      case "--json":
+      case "-j": {
         const val = next();
         options.json = val || true;
         break;
       }
-      case '--comment-file': options.commentFile = args[++i]; break;
-      case '--post-comment': options.postComment = true; break;
-      case '--pr-number': options.prNumber = args[++i]; break;
-      case '--output-dir': options.outputDir = args[++i]; break;
+      case "--comment-file":
+        options.commentFile = args[++i];
+        break;
+      case "--post-comment":
+        options.postComment = true;
+        break;
+      case "--pr-number":
+        options.prNumber = args[++i];
+        break;
+      case "--output-dir":
+        options.outputDir = args[++i];
+        break;
 
       // Other
-      case '--verbose': case '-v': options.verbose = true; break;
-      case '--help': case '-h': options.help = true; break;
-      case '--version': options.version = true; break;
+      case "--verbose":
+      case "-v":
+        options.verbose = true;
+        break;
+      case "--help":
+      case "-h":
+        options.help = true;
+        break;
+      case "--version":
+        options.version = true;
+        break;
     }
   }
 
@@ -92,11 +138,11 @@ function parseArgs(args) {
  * @returns {'full'|'file'|null}
  */
 function determineMode(options) {
-  if (options.baseStats && options.prStats) return 'file';
-  if (options.base && options.pr && options.repoUrl) return 'full';
+  if (options.baseStats && options.prStats) return "file";
+  if (options.base && options.pr && options.repoUrl) return "full";
   if (options.base && options.pr) {
     // Check env for REPO_URL
-    if (process.env.REPO_URL) return 'full';
+    if (process.env.REPO_URL) return "full";
   }
   return null;
 }
@@ -115,8 +161,11 @@ function createLogger(options) {
     info: (msg) => log(`${C.cyan}${C.bold}▸${C.reset} ${msg}`),
     ok: (msg) => log(`${C.green}✓${C.reset} ${msg}`),
     warn: (msg) => log(`${C.yellow}⚠${C.reset} ${msg}`),
-    fail: (msg) => { err(`${C.red}✗${C.reset} ${msg}`); },
-    phase: (n, total, msg) => log(`\n${C.cyan}[Phase ${n}/${total}]${C.reset} ${msg}`),
+    fail: (msg) => {
+      err(`${C.red}✗${C.reset} ${msg}`);
+    },
+    phase: (n, total, msg) =>
+      log(`\n${C.cyan}[Phase ${n}/${total}]${C.reset} ${msg}`),
     log,
   };
 }
@@ -173,35 +222,41 @@ async function main() {
   }
 
   if (options.version) {
-    console.log('Bundle AI v1.0.0');
+    console.log("Bundle AI v1.0.0");
     process.exit(0);
   }
 
   const mode = determineMode(options);
 
   if (!mode) {
-    console.error('Error: Provide --base-stats/--pr-stats for file mode, or --base/--pr/--repo-url for full mode.');
+    console.error(
+      "Error: Provide --base-stats/--pr-stats for file mode, or --base/--pr/--repo-url for full mode.",
+    );
     printHelp();
     process.exit(1);
   }
 
   // Resolve repo URL from env if not provided via flag
-  if (mode === 'full' && !options.repoUrl) {
+  if (mode === "full" && !options.repoUrl) {
     options.repoUrl = process.env.REPO_URL;
   }
 
   // Auto-detect PR branch from git if not provided
-  if (mode === 'full' && !options.pr) {
+  if (mode === "full" && !options.pr) {
     try {
-      const { execSync } = require('child_process');
-      options.pr = execSync('git rev-parse --abbrev-ref HEAD', { encoding: 'utf-8' }).trim();
+      const { execSync } = require("child_process");
+      options.pr = execSync("git rev-parse --abbrev-ref HEAD", {
+        encoding: "utf-8",
+      }).trim();
     } catch {
-      console.error('Error: Could not detect current branch. Use --pr <branch>.');
+      console.error(
+        "Error: Could not detect current branch. Use --pr <branch>.",
+      );
       process.exit(1);
     }
   }
 
-  if (mode === 'full') {
+  if (mode === "full") {
     await runFullMode(options);
   } else {
     await runFileMode(options);
@@ -214,19 +269,25 @@ async function main() {
  */
 async function runFullMode(options) {
   const logger = createLogger(options);
-  const outputDir = path.resolve(options.outputDir || 'reports');
-  const tmpDir = path.resolve('tmp');
+  const outputDir = path.resolve(options.outputDir || "reports");
+  const tmpDir = path.resolve("tmp");
 
   // Banner
-  logger.log('');
-  logger.log(`${C.cyan}╔══════════════════════════════════════════════════════════╗${C.reset}`);
-  logger.log(`${C.cyan}║        HYPERSWITCH BUNDLE AI — ORCHESTRATOR             ║${C.reset}`);
-  logger.log(`${C.cyan}╚══════════════════════════════════════════════════════════╝${C.reset}`);
-  logger.log('');
+  logger.log("");
+  logger.log(
+    `${C.cyan}╔══════════════════════════════════════════════════════════╗${C.reset}`,
+  );
+  logger.log(
+    `${C.cyan}║        HYPERSWITCH BUNDLE AI — ORCHESTRATOR              ║${C.reset}`,
+  );
+  logger.log(
+    `${C.cyan}╚══════════════════════════════════════════════════════════╝${C.reset}`,
+  );
+  logger.log("");
   logger.log(`Base: ${options.base}`);
   logger.log(`PR:   ${options.pr}`);
   logger.log(`Repo: ${options.repoUrl}`);
-  logger.log('');
+  logger.log("");
 
   // Clean tmp
   if (fs.existsSync(tmpDir)) {
@@ -234,21 +295,48 @@ async function runFullMode(options) {
   }
   fs.mkdirSync(tmpDir, { recursive: true });
 
-  // Phase 1: Build (max 2 parallel)
-  logger.phase(1, 5, 'Building base and PR branches...');
+  // Phase 1: Clone & Build (sequential in single repo)
+  logger.phase(1, 5, "Cloning and building branches...");
   const buildStart = Date.now();
 
   const buildLog = options.verbose ? logger.info.bind(logger) : () => {};
+  const repoDir = path.join(tmpDir, "repo");
+  const { cloneRepo, buildBranch } = require("../lib/clone-builder");
 
-  const [baseResult, prResult] = await runWithConcurrency([
-    () => cloneAndBuild(options.repoUrl, options.base, path.join(tmpDir, 'base'), { log: buildLog }),
-    () => cloneAndBuild(options.repoUrl, options.pr, path.join(tmpDir, 'pr'), { log: buildLog }),
-  ], 2);
+  // Phase 1a: Clone repo (full clone)
+  await cloneRepo(options.repoUrl, repoDir, { log: buildLog });
 
-  logger.ok(`Builds complete in ${((Date.now() - buildStart) / 1000).toFixed(1)}s`);
+  // Phase 1b: Build base branch
+  const baseResult = await buildBranch(repoDir, options.base, path.join(tmpDir, "base"), { log: buildLog });
+
+  // Phase 1c: Build PR branch
+  const prResult = await buildBranch(repoDir, options.pr, path.join(tmpDir, "pr"), { log: buildLog });
+
+  logger.ok(
+    `Builds complete in ${((Date.now() - buildStart) / 1000).toFixed(1)}s`,
+  );
+
+  // Phase 1d: Collect code diff
+  let codeDiffData = null;
+  try {
+    const { collectCodeDiff } = require("../lib/code-diff");
+    codeDiffData = collectCodeDiff(repoDir, options.base, options.pr, {
+      baseCompiledDir: baseResult.compiledJsDir,
+      prCompiledDir: prResult.compiledJsDir,
+    });
+  } catch (err) {
+    logger.warn(`Code diff collection failed: ${err.message}, continuing without it`);
+  }
 
   // Run shared pipeline (Phases 2-5)
-  await runPipeline(baseResult.statsPath, prResult.statsPath, options, logger, outputDir);
+  await runPipeline(
+    baseResult.statsPath,
+    prResult.statsPath,
+    options,
+    logger,
+    outputDir,
+    codeDiffData,
+  );
 }
 
 /**
@@ -257,7 +345,7 @@ async function runFullMode(options) {
  */
 async function runFileMode(options) {
   const logger = createLogger(options);
-  const outputDir = path.resolve(options.outputDir || 'reports');
+  const outputDir = path.resolve(options.outputDir || "reports");
 
   // Verify files exist
   if (!fs.existsSync(options.baseStats)) {
@@ -268,17 +356,29 @@ async function runFileMode(options) {
   }
 
   if (options.json !== true) {
-    logger.log('');
-    logger.log(`${C.cyan}╔══════════════════════════════════════════════════════════╗${C.reset}`);
-    logger.log(`${C.cyan}║        HYPERSWITCH BUNDLE AI — ORCHESTRATOR             ║${C.reset}`);
-    logger.log(`${C.cyan}╚══════════════════════════════════════════════════════════╝${C.reset}`);
-    logger.log('');
+    logger.log("");
+    logger.log(
+      `${C.cyan}╔══════════════════════════════════════════════════════════╗${C.reset}`,
+    );
+    logger.log(
+      `${C.cyan}║        HYPERSWITCH BUNDLE AI — ORCHESTRATOR              ║${C.reset}`,
+    );
+    logger.log(
+      `${C.cyan}╚══════════════════════════════════════════════════════════╝${C.reset}`,
+    );
+    logger.log("");
     logger.info(`Base stats: ${options.baseStats}`);
     logger.info(`PR stats: ${options.prStats}`);
-    logger.log('');
+    logger.log("");
   }
 
-  await runPipeline(options.baseStats, options.prStats, options, logger, outputDir);
+  await runPipeline(
+    options.baseStats,
+    options.prStats,
+    options,
+    logger,
+    outputDir,
+  );
 }
 
 /**
@@ -288,67 +388,146 @@ async function runFileMode(options) {
  * @param {Object} options
  * @param {Object} logger
  * @param {string} outputDir
+ * @param {Object|null} codeDiffData
  */
-async function runPipeline(baseStatsPath, prStatsPath, options, logger, outputDir) {
+async function runPipeline(
+  baseStatsPath,
+  prStatsPath,
+  options,
+  logger,
+  outputDir,
+  codeDiffData = null,
+) {
   const errors = [];
 
   // Phase 2: Analyze
-  logger.phase(2, 5, 'Computing diff and running detection rules...');
+  logger.phase(2, 5, "Computing diff and running detection rules...");
   const analyzeStart = Date.now();
 
-  const { diff, summary, detections, baseStats, prStats } = computeAnalysisInputs(baseStatsPath, prStatsPath);
+  const { diff, summary, detections, baseStats, prStats } =
+    computeAnalysisInputs(baseStatsPath, prStatsPath);
 
-  logger.ok(`${diff.allChanges.length} changes, ${detections.violations.length} issues (${((Date.now() - analyzeStart) / 1000).toFixed(1)}s)`);
+  logger.ok(
+    `${diff.allChanges.length} changes, ${detections.violations.length} issues (${((Date.now() - analyzeStart) / 1000).toFixed(1)}s)`,
+  );
 
-  // Phase 3: AI
-  logger.phase(3, 5, 'Running AI analysis...');
-  const aiStart = Date.now();
-
-  let aiResult;
   const context = {};
   if (options.lines) {
     context.linesChanged = parseInt(options.lines, 10);
   }
   const enrichedContext = { ...context, rawStats: { baseStats, prStats } };
 
+  // Phase 2.5: Code Diff Analysis
+  if (codeDiffData) {
+    logger.phase(2.5, 5, "Analyzing code changes...");
+    const codeDiffStart = Date.now();
+
+    try {
+      // ReScript analysis (synchronous — uses execSync internally)
+      const { analyzeReScriptChanges, generateReScriptSummary } = require("../lib/rescript-analyzer");
+      const reScriptAnalysis = analyzeReScriptChanges(
+        codeDiffData.baseBranch, codeDiffData.prBranch, { cwd: codeDiffData.repoDir },
+      );
+      const reScriptSummary = generateReScriptSummary(reScriptAnalysis, diff);
+
+      // Chunk and analyze diffs in parallel
+      const { chunkDiff } = require("../lib/code-diff");
+      const { analyzeCodeChunks } = require("../lib/ai-client");
+
+      const allDiff = (codeDiffData.sourceDiff || "") + "\n" + (codeDiffData.compiledDiff || "");
+      const chunks = chunkDiff(allDiff);
+
+      let codeDiffSummary = null;
+      if (chunks.length > 0 && !options.skipAI && isAIAvailable()) {
+        const client = createClient({ model: options.model });
+        codeDiffSummary = await analyzeCodeChunks(client, chunks, 3);
+      }
+
+      // Merge into enriched context
+      if (codeDiffSummary) {
+        enrichedContext.codeDiffSummary = codeDiffSummary;
+      }
+      enrichedContext.reScriptAnalysis = reScriptSummary;
+      // Only set linesChanged if not explicitly overridden by --lines CLI flag
+      if (!enrichedContext.linesChanged) {
+        enrichedContext.linesChanged = codeDiffData.linesChanged;
+      }
+      enrichedContext.fileStats = codeDiffData.fileStats;
+
+      logger.ok(`Code diff analyzed: ${codeDiffData.fileStats.length} files, ${chunks.length} chunks (${((Date.now() - codeDiffStart) / 1000).toFixed(1)}s)`);
+    } catch (err) {
+      logger.warn(`Code diff analysis failed: ${err.message}, continuing without it`);
+    }
+  }
+
+  // Phase 3: AI
+  logger.phase(3, 5, "Running AI analysis...");
+  const aiStart = Date.now();
+
+  let aiResult;
+
   if (!options.skipAI && isAIAvailable()) {
     try {
       const client = createClient({ model: options.model });
       aiResult = await analyzeBundle(client, diff, detections, enrichedContext);
-      logger.ok(`AI: ${aiResult.verdict} (${(aiResult.confidence * 100).toFixed(0)}% confidence, ${((Date.now() - aiStart) / 1000).toFixed(1)}s)`);
+      logger.ok(
+        `AI: ${aiResult.verdict} (${(aiResult.confidence * 100).toFixed(0)}% confidence, ${((Date.now() - aiStart) / 1000).toFixed(1)}s)`,
+      );
     } catch (error) {
       logger.warn(`AI failed: ${error.message}, using offline analysis`);
       aiResult = analyzeOffline(diff, detections);
     }
   } else {
-    logger.info('Offline analysis (no AI available)');
+    logger.info("Offline analysis (no AI available)");
     aiResult = analyzeOffline(diff, detections);
   }
 
   // Phase 4: Reports (max 3 parallel)
-  logger.phase(4, 5, 'Generating reports...');
+  logger.phase(4, 5, "Generating reports...");
   const reportStart = Date.now();
 
   const analysis = { diff, ai: aiResult, detections, summary };
 
   const reportTasks = [
     () => {
-      try { return { key: 'text', value: generateAnalysisReport(diff, detections, aiResult, context) }; }
-      catch (e) { errors.push({ phase: 'report', name: 'text', error: e }); return { key: 'text', value: null }; }
+      try {
+        return {
+          key: "text",
+          value: generateAnalysisReport(diff, detections, aiResult, context),
+        };
+      } catch (e) {
+        errors.push({ phase: "report", name: "text", error: e });
+        return { key: "text", value: null };
+      }
     },
     () => {
-      try { return { key: 'json', value: generateJSONOutput({ diff, detections, ai: aiResult }) }; }
-      catch (e) { errors.push({ phase: 'report', name: 'json', error: e }); return { key: 'json', value: null }; }
+      try {
+        return {
+          key: "json",
+          value: generateJSONOutput({ diff, detections, ai: aiResult }),
+        };
+      } catch (e) {
+        errors.push({ phase: "report", name: "json", error: e });
+        return { key: "json", value: null };
+      }
     },
     () => {
-      try { return { key: 'comment', value: generateComment(analysis) }; }
-      catch (e) { errors.push({ phase: 'report', name: 'comment', error: e }); return { key: 'comment', value: null }; }
+      try {
+        return { key: "comment", value: generateComment(analysis) };
+      } catch (e) {
+        errors.push({ phase: "report", name: "comment", error: e });
+        return { key: "comment", value: null };
+      }
     },
     () => {
-      try { return { key: 'diff', value: generateDiffReport(diff, summary) }; }
-      catch (e) { errors.push({ phase: 'report', name: 'diff', error: e }); return { key: 'diff', value: null }; }
+      try {
+        return { key: "diff", value: generateDiffReport(diff, summary) };
+      } catch (e) {
+        errors.push({ phase: "report", name: "diff", error: e });
+        return { key: "diff", value: null };
+      }
     },
-  ].map(fn => () => Promise.resolve(fn()));
+  ].map((fn) => () => Promise.resolve(fn()));
 
   const reportResults = await runWithConcurrency(reportTasks, 3);
   const reports = {};
@@ -356,12 +535,14 @@ async function runPipeline(baseStatsPath, prStatsPath, options, logger, outputDi
     reports[r.key] = r.value;
   }
 
-  logger.ok(`Reports generated (${((Date.now() - reportStart) / 1000).toFixed(1)}s)`);
+  logger.ok(
+    `Reports generated (${((Date.now() - reportStart) / 1000).toFixed(1)}s)`,
+  );
 
   // If --json with no path (stdout mode), output JSON and return
   if (options.json === true) {
     if (reports.json) {
-      process.stdout.write(JSON.stringify(reports.json, null, 2) + '\n');
+      process.stdout.write(JSON.stringify(reports.json, null, 2) + "\n");
     }
     process.exit(detections.hasCriticalIssues ? 1 : 0);
     return;
@@ -369,12 +550,12 @@ async function runPipeline(baseStatsPath, prStatsPath, options, logger, outputDi
 
   // Print text report to console
   if (reports.text) {
-    logger.log('');
+    logger.log("");
     logger.log(reports.text);
   }
 
   // Phase 5: Output (max 3 parallel)
-  logger.phase(5, 5, 'Saving reports...');
+  logger.phase(5, 5, "Saving reports...");
   const outputStart = Date.now();
 
   fs.mkdirSync(outputDir, { recursive: true });
@@ -384,47 +565,69 @@ async function runPipeline(baseStatsPath, prStatsPath, options, logger, outputDi
   if (reports.text) {
     outputTasks.push(() => {
       try {
-        fs.writeFileSync(path.join(outputDir, 'analyze-report.txt'), reports.text);
-        return { name: 'analyze-report.txt', ok: true };
-      } catch (e) { errors.push({ phase: 'output', name: 'analyze-report.txt', error: e }); return { name: 'analyze-report.txt', ok: false }; }
+        fs.writeFileSync(
+          path.join(outputDir, "analyze-report.txt"),
+          reports.text,
+        );
+        return { name: "analyze-report.txt", ok: true };
+      } catch (e) {
+        errors.push({ phase: "output", name: "analyze-report.txt", error: e });
+        return { name: "analyze-report.txt", ok: false };
+      }
     });
   }
 
   if (reports.json) {
     outputTasks.push(() => {
       try {
-        fs.writeFileSync(path.join(outputDir, 'analyze-output.json'), JSON.stringify(reports.json, null, 2));
-        return { name: 'analyze-output.json', ok: true };
-      } catch (e) { errors.push({ phase: 'output', name: 'analyze-output.json', error: e }); return { name: 'analyze-output.json', ok: false }; }
+        fs.writeFileSync(
+          path.join(outputDir, "analyze-output.json"),
+          JSON.stringify(reports.json, null, 2),
+        );
+        return { name: "analyze-output.json", ok: true };
+      } catch (e) {
+        errors.push({ phase: "output", name: "analyze-output.json", error: e });
+        return { name: "analyze-output.json", ok: false };
+      }
     });
   }
 
   if (reports.comment) {
     outputTasks.push(() => {
       try {
-        const commentPath = options.commentFile || path.join(outputDir, 'comment-report.md');
+        const commentPath =
+          options.commentFile || path.join(outputDir, "comment-report.md");
         fs.writeFileSync(commentPath, reports.comment);
-        return { name: 'comment-report.md', ok: true };
-      } catch (e) { errors.push({ phase: 'output', name: 'comment-report.md', error: e }); return { name: 'comment-report.md', ok: false }; }
+        return { name: "comment-report.md", ok: true };
+      } catch (e) {
+        errors.push({ phase: "output", name: "comment-report.md", error: e });
+        return { name: "comment-report.md", ok: false };
+      }
     });
   }
 
   if (reports.diff) {
     outputTasks.push(() => {
       try {
-        fs.writeFileSync(path.join(outputDir, 'diff-report.txt'), reports.diff);
-        return { name: 'diff-report.txt', ok: true };
-      } catch (e) { errors.push({ phase: 'output', name: 'diff-report.txt', error: e }); return { name: 'diff-report.txt', ok: false }; }
+        fs.writeFileSync(path.join(outputDir, "diff-report.txt"), reports.diff);
+        return { name: "diff-report.txt", ok: true };
+      } catch (e) {
+        errors.push({ phase: "output", name: "diff-report.txt", error: e });
+        return { name: "diff-report.txt", ok: false };
+      }
     });
   }
 
   // Save JSON to custom path if specified
-  if (typeof options.json === 'string' && reports.json) {
+  if (typeof options.json === "string" && reports.json) {
     outputTasks.push(() => {
       try {
         fs.writeFileSync(options.json, JSON.stringify(reports.json, null, 2));
         return { name: options.json, ok: true };
-      } catch (e) { errors.push({ phase: 'output', name: options.json, error: e }); return { name: options.json, ok: false }; }
+      } catch (e) {
+        errors.push({ phase: "output", name: options.json, error: e });
+        return { name: options.json, ok: false };
+      }
     });
   }
 
@@ -433,12 +636,18 @@ async function runPipeline(baseStatsPath, prStatsPath, options, logger, outputDi
     outputTasks.push(async () => {
       try {
         await upsertComment(reports.comment, { prNumber: options.prNumber });
-        return { name: 'GitHub comment', ok: true };
-      } catch (e) { errors.push({ phase: 'output', name: 'GitHub comment', error: e }); return { name: 'GitHub comment', ok: false }; }
+        return { name: "GitHub comment", ok: true };
+      } catch (e) {
+        errors.push({ phase: "output", name: "GitHub comment", error: e });
+        return { name: "GitHub comment", ok: false };
+      }
     });
   }
 
-  const outputResults = await runWithConcurrency(outputTasks.map(fn => () => Promise.resolve(fn())), 3);
+  const outputResults = await runWithConcurrency(
+    outputTasks.map((fn) => () => Promise.resolve(fn())),
+    3,
+  );
 
   for (const r of outputResults) {
     if (r.ok) {
@@ -448,33 +657,45 @@ async function runPipeline(baseStatsPath, prStatsPath, options, logger, outputDi
     }
   }
 
-  logger.ok(`Output complete (${((Date.now() - outputStart) / 1000).toFixed(1)}s)`);
+  logger.ok(
+    `Output complete (${((Date.now() - outputStart) / 1000).toFixed(1)}s)`,
+  );
 
   // Summary
-  logger.log('');
+  logger.log("");
   if (aiResult) {
-    logger.log(`AI Verdict: ${C.bold}${aiResult.verdict}${C.reset} (${(aiResult.confidence * 100).toFixed(0)}% confidence)`);
+    logger.log(
+      `AI Verdict: ${C.bold}${aiResult.verdict}${C.reset} (${(aiResult.confidence * 100).toFixed(0)}% confidence)`,
+    );
   }
 
   // Report errors
   if (errors.length > 0) {
-    logger.log('');
+    logger.log("");
     logger.warn(`${errors.length} non-fatal error(s):`);
     for (const e of errors) {
       logger.warn(`  [${e.phase}] ${e.name}: ${e.error.message}`);
     }
   }
 
-  logger.log('');
+  logger.log("");
   process.exit(detections.hasCriticalIssues ? 1 : 0);
 }
 
 // CLI entry
 if (require.main === module) {
-  main().catch(error => {
+  main().catch((error) => {
     console.error(`\n${C.red}✗${C.reset} Fatal: ${error.message}`);
     process.exit(1);
   });
 }
 
-module.exports = { parseArgs, determineMode, createLogger, main, runFullMode, runFileMode, runPipeline };
+module.exports = {
+  parseArgs,
+  determineMode,
+  createLogger,
+  main,
+  runFullMode,
+  runFileMode,
+  runPipeline,
+};

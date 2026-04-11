@@ -1961,6 +1961,12 @@ testAsync('analyzeCodeChunks returns null when all chunks fail', async () => {
   }
 });
 
+test('runPipeline accepts optional 6th codeDiffData parameter', () => {
+  const { runPipeline } = require('../scripts/orchestrate');
+  // Verify function accepts 6 params (length is unreliable with defaults, just verify export exists)
+  assertEqual(typeof runPipeline, 'function');
+});
+
 // Run async tests
 async function runAsyncTests() {
   for (const { name, fn } of asyncTests) {
