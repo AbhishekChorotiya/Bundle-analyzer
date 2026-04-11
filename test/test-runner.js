@@ -1636,6 +1636,73 @@ test('chunkDiff respects CODE_DIFF_CHUNK_MAX_BYTES env var', () => {
   assertEqual(chunks.length, 1, 'Default maxBytes should fit small diffs in one chunk');
 });
 
+test('collectCodeDiff separates source and compiled diffs', () => {
+  const { collectCodeDiff } = require('../lib/code-diff');
+  const childProcess = require('child_process');
+  const originalExecSync = childProcess.execSync;
+
+  try {
+    childProcess.execSync = (cmd, opts) => {
+      if (cmd.includes("-- ':!lib/js/'")) {
+        return 'diff --git a/src/Foo.res b/src/Foo.res\n+added line\n';
+      }
+      if (cmd.includes('--no-index')) {
+        const err = new Error('exit code 1');
+        err.status = 1;
+        err.stdout = Buffer.from('diff --git a/tmp/base-compiled/Foo.js b/tmp/pr-compiled/Foo.js\n+compiled line\n');
+        throw err;
+      }
+      return '';
+    };
+
+    const result = collectCodeDiff('/fake/repo', 'main', 'feature', {
+      baseCompiledDir: 'tmp/base-compiled',
+      prCompiledDir: 'tmp/pr-compiled',
+    });
+
+    assertTrue(result.sourceDiff.includes('src/Foo.res'), 'sourceDiff should contain source file');
+    assertTrue(result.compiledDiff.includes('lib/js/Foo.js'), 'compiledDiff should have rewritten path');
+    assertFalse(result.compiledDiff.includes('tmp/base-compiled'), 'compiledDiff should not have temp paths');
+    assertEqual(result.baseBranch, 'main');
+    assertEqual(result.prBranch, 'feature');
+    assertEqual(result.repoDir, '/fake/repo');
+    assertTrue(result.linesChanged >= 1, 'Should compute linesChanged from source diff');
+    assertTrue(Array.isArray(result.fileStats), 'fileStats should be an array');
+  } finally {
+    childProcess.execSync = originalExecSync;
+  }
+});
+
+test('collectCodeDiff handles no compiled diff gracefully', () => {
+  const { collectCodeDiff } = require('../lib/code-diff');
+  const childProcess = require('child_process');
+  const originalExecSync = childProcess.execSync;
+
+  try {
+    childProcess.execSync = (cmd, opts) => {
+      if (cmd.includes("-- ':!lib/js/'")) {
+        return 'diff --git a/src/X.js b/src/X.js\n+line\n';
+      }
+      if (cmd.includes('--no-index')) {
+        const err = new Error('fatal');
+        err.status = 2;
+        throw err;
+      }
+      return '';
+    };
+
+    const result = collectCodeDiff('/fake/repo', 'main', 'feature', {
+      baseCompiledDir: 'tmp/base-compiled',
+      prCompiledDir: 'tmp/pr-compiled',
+    });
+
+    assertTrue(result.sourceDiff.includes('src/X.js'), 'sourceDiff should still work');
+    assertEqual(result.compiledDiff, '', 'compiledDiff should be empty on error');
+  } finally {
+    childProcess.execSync = originalExecSync;
+  }
+});
+
 // Run async tests
 async function runAsyncTests() {
   for (const { name, fn } of asyncTests) {
