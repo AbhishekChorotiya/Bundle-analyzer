@@ -6,7 +6,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { formatBytes: utilsFormatBytes, loadEnv, getRootCause } = require('../lib/utils');
+const { formatBytes: utilsFormatBytes, loadEnv, getRootCause, validateGitRef } = require('../lib/utils');
 
 // Test utilities
 let testsRun = 0;
@@ -599,7 +599,28 @@ test('mapToJSDependencies maps correctly', () => {
 
 // Test ai-client
 console.log('\n--- Testing ai-client.js ---');
-const { parseAIResponse, isAIAvailable } = require('../lib/ai-client');
+const { parseAIResponse, isAIAvailable, extractJSON } = require('../lib/ai-client');
+
+test('extractJSON parses plain JSON', () => {
+  const result = extractJSON('{"key": "value"}');
+  assertEqual(result.key, 'value');
+});
+
+test('extractJSON strips markdown code fences', () => {
+  const result = extractJSON('```json\n{"key": "fenced"}\n```');
+  assertEqual(result.key, 'fenced');
+});
+
+test('extractJSON strips code fences without json tag', () => {
+  const result = extractJSON('```\n{"key": "bare"}\n```');
+  assertEqual(result.key, 'bare');
+});
+
+test('extractJSON throws on invalid JSON', () => {
+  let threw = false;
+  try { extractJSON('not json'); } catch { threw = true; }
+  assertTrue(threw, 'Should throw on invalid JSON');
+});
 
 test('parseAIResponse validates responses', () => {
   const validResponse = JSON.stringify({
@@ -633,6 +654,36 @@ test('isAIAvailable checks env var', () => {
 
 // Test utils.js
 console.log('\n--- Testing utils.js ---');
+
+test('validateGitRef allows valid branch names', () => {
+  assertEqual(validateGitRef('main'), 'main');
+  assertEqual(validateGitRef('feature/my-branch'), 'feature/my-branch');
+  assertEqual(validateGitRef('v1.0.0'), 'v1.0.0');
+  assertEqual(validateGitRef('abc123def'), 'abc123def');
+  assertEqual(validateGitRef('my_branch-name.1'), 'my_branch-name.1');
+});
+
+test('validateGitRef rejects unsafe branch names', () => {
+  let threw = false;
+  try { validateGitRef('main; rm -rf /'); } catch { threw = true; }
+  assertTrue(threw, 'Should reject branch name with semicolon');
+
+  threw = false;
+  try { validateGitRef('branch$(whoami)'); } catch { threw = true; }
+  assertTrue(threw, 'Should reject branch name with command substitution');
+
+  threw = false;
+  try { validateGitRef(''); } catch { threw = true; }
+  assertTrue(threw, 'Should reject empty string');
+
+  threw = false;
+  try { validateGitRef(null); } catch { threw = true; }
+  assertTrue(threw, 'Should reject null');
+
+  threw = false;
+  try { validateGitRef('branch`id`'); } catch { threw = true; }
+  assertTrue(threw, 'Should reject backticks');
+});
 
 test('utils loadEnv loads environment variables', () => {
   const tmpDir = path.join(__dirname, '.tmp-test');

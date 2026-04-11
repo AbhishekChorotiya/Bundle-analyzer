@@ -417,6 +417,12 @@ async function runPipeline(
   }
   const enrichedContext = { ...context, rawStats: { baseStats, prStats } };
 
+  // Create AI client once for both Phase 2.5 and Phase 3
+  let aiClient = null;
+  if (!options.skipAI && isAIAvailable()) {
+    aiClient = createClient({ model: options.model });
+  }
+
   // Phase 2.5: Code Diff Analysis
   if (codeDiffData) {
     logger.phase(2.5, 5, "Analyzing code changes...");
@@ -438,9 +444,8 @@ async function runPipeline(
       const chunks = chunkDiff(allDiff);
 
       let codeDiffSummary = null;
-      if (chunks.length > 0 && !options.skipAI && isAIAvailable()) {
-        const client = createClient({ model: options.model });
-        codeDiffSummary = await analyzeCodeChunks(client, chunks, 3);
+      if (chunks.length > 0 && aiClient) {
+        codeDiffSummary = await analyzeCodeChunks(aiClient, chunks, 3);
       }
 
       // Merge into enriched context
@@ -466,10 +471,9 @@ async function runPipeline(
 
   let aiResult;
 
-  if (!options.skipAI && isAIAvailable()) {
+  if (aiClient) {
     try {
-      const client = createClient({ model: options.model });
-      aiResult = await analyzeBundle(client, diff, detections, enrichedContext);
+      aiResult = await analyzeBundle(aiClient, diff, detections, enrichedContext);
       logger.ok(
         `AI: ${aiResult.verdict} (${(aiResult.confidence * 100).toFixed(0)}% confidence, ${((Date.now() - aiStart) / 1000).toFixed(1)}s)`,
       );
