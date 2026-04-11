@@ -1580,6 +1580,62 @@ test('parseDiffStats handles new file (no a/ prefix)', () => {
   assertEqual(stats[0].linesRemoved, 0);
 });
 
+test('chunkDiff splits diff into chunks under maxBytes', () => {
+  const diff = [
+    'diff --git a/a.js b/a.js',
+    '--- a/a.js',
+    '+++ b/a.js',
+    '@@ -1 +1 @@',
+    '-old',
+    '+new',
+    'diff --git a/b.js b/b.js',
+    '--- a/b.js',
+    '+++ b/b.js',
+    '@@ -1 +1 @@',
+    '-old',
+    '+new',
+    'diff --git a/c.js b/c.js',
+    '--- a/c.js',
+    '+++ b/c.js',
+    '@@ -1 +1 @@',
+    '-old',
+    '+new',
+  ].join('\n');
+  const chunks = chunkDiff(diff, 120);
+  assertTrue(chunks.length >= 2, 'Should create at least 2 chunks');
+  for (const chunk of chunks) {
+    assertTrue(chunk.startsWith('diff --git'), 'Each chunk starts with diff --git');
+  }
+});
+
+test('chunkDiff returns single chunk for small diff', () => {
+  const diff = 'diff --git a/a.js b/a.js\n-old\n+new\n';
+  const chunks = chunkDiff(diff, 50000);
+  assertEqual(chunks.length, 1);
+});
+
+test('chunkDiff puts oversized single file in its own chunk', () => {
+  const bigFile = 'diff --git a/big.js b/big.js\n' + '+line\n'.repeat(100);
+  const smallFile = 'diff --git a/small.js b/small.js\n+tiny\n';
+  const diff = bigFile + smallFile;
+  const chunks = chunkDiff(diff, 50);
+  assertEqual(chunks.length, 2, 'Big file gets own chunk, small file in another');
+});
+
+test('chunkDiff returns empty array for empty input', () => {
+  assertEqual(chunkDiff('').length, 0);
+  assertEqual(chunkDiff('  \n').length, 0);
+});
+
+test('chunkDiff respects CODE_DIFF_CHUNK_MAX_BYTES env var', () => {
+  const diff = [
+    'diff --git a/a.js b/a.js\n-old\n+new',
+    'diff --git a/b.js b/b.js\n-old\n+new',
+  ].join('\n');
+  const chunks = chunkDiff(diff);
+  assertEqual(chunks.length, 1, 'Default maxBytes should fit small diffs in one chunk');
+});
+
 // Run async tests
 async function runAsyncTests() {
   for (const { name, fn } of asyncTests) {
