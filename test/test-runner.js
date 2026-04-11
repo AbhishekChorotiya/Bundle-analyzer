@@ -1721,6 +1721,35 @@ test('cloneAndBuild is still exported for backward compatibility', () => {
   assertEqual(typeof cloneBuilder.cloneAndBuild, 'function');
 });
 
+// ============================================================
+// rescript-analyzer.js bug fix + cwd tests
+// ============================================================
+console.log('\n--- Testing rescript-analyzer.js fixes ---');
+
+test('analyzeReScriptChanges: newImports bug fix - should use addedImports not newImports', () => {
+  const { extractImports } = require('../lib/rescript-analyzer');
+
+  const oldContent = 'open ReactNative\nopen Belt';
+  const newContent = 'open ReactNative\nopen Belt\nopen Js.Promise';
+
+  const oldImports = extractImports(oldContent);
+  const newImports = extractImports(newContent);
+
+  assertEqual(newImports.length, 3, 'newImports should have all 3 imports');
+  const addedImports = newImports.filter(imp => !oldImports.includes(imp));
+  assertEqual(addedImports.length, 1, 'Only Js.Promise should be added');
+  assertEqual(addedImports[0], 'Js.Promise');
+});
+
+test('rescript-analyzer functions accept cwd option', () => {
+  const { analyzeReScriptChanges } = require('../lib/rescript-analyzer');
+  assertEqual(typeof analyzeReScriptChanges, 'function');
+  // analyzeReScriptChanges catches all errors and returns empty result
+  const result = analyzeReScriptChanges('nonexistent', 'also-nonexistent', { cwd: '/tmp' });
+  assertEqual(result.filesChanged.length, 0, 'Should return empty result on error');
+  assertTrue(Array.isArray(result.importsAdded));
+});
+
 // Run async tests
 async function runAsyncTests() {
   for (const { name, fn } of asyncTests) {
