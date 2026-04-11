@@ -1703,6 +1703,24 @@ test('collectCodeDiff handles no compiled diff gracefully', () => {
   }
 });
 
+// ============================================================
+// clone-builder.js new functions tests
+// ============================================================
+console.log('\n--- Testing clone-builder.js new functions ---');
+const cloneBuilder = require('../lib/clone-builder');
+
+test('cloneRepo is exported', () => {
+  assertEqual(typeof cloneBuilder.cloneRepo, 'function');
+});
+
+test('buildBranch is exported', () => {
+  assertEqual(typeof cloneBuilder.buildBranch, 'function');
+});
+
+test('cloneAndBuild is still exported for backward compatibility', () => {
+  assertEqual(typeof cloneBuilder.cloneAndBuild, 'function');
+});
+
 // Run async tests
 async function runAsyncTests() {
   for (const { name, fn } of asyncTests) {
