@@ -1750,6 +1750,139 @@ test('rescript-analyzer functions accept cwd option', () => {
   assertTrue(Array.isArray(result.importsAdded));
 });
 
+// ============================================================
+// ai-client.js code chunk analysis tests
+// ============================================================
+console.log('\n--- Testing ai-client.js chunk analysis ---');
+const { analyzeCodeChunks, analyzeCodeChunk } = require('../lib/ai-client');
+
+test('analyzeCodeChunk is exported', () => {
+  assertEqual(typeof analyzeCodeChunk, 'function');
+});
+
+test('analyzeCodeChunks is exported', () => {
+  assertEqual(typeof analyzeCodeChunks, 'function');
+});
+
+testAsync('analyzeCodeChunks merges multiple chunk results', async () => {
+  const originalFetch = global.fetch;
+  try {
+    global.fetch = async (url, opts) => {
+      const body = JSON.parse(opts.body);
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: JSON.stringify({
+                filesAnalyzed: ['src/Test.res'],
+                keyChanges: [{ file: 'src/Test.res', description: 'test change', type: 'feature' }],
+                riskAreas: [],
+                newImports: ['lodash'],
+                removedImports: [],
+              }),
+            },
+          }],
+        }),
+      };
+    };
+
+    const client = { apiKey: 'test-key', model: 'test', baseURL: 'http://localhost' };
+    const chunks = ['diff --git a/chunk1\n+line1', 'diff --git a/chunk2\n+line2'];
+    const result = await analyzeCodeChunks(client, chunks, 2);
+
+    assertEqual(typeof result.totalFiles, 'number');
+    assertTrue(result.totalFiles >= 2, 'Should sum files from both chunks');
+    assertTrue(Array.isArray(result.keyChanges));
+    assertTrue(Array.isArray(result.newImports));
+    assertTrue(Array.isArray(result.removedImports));
+    assertEqual(typeof result.failedChunks, 'number');
+    assertEqual(result.failedChunks, 0);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+testAsync('analyzeCodeChunks handles chunk failures gracefully', async () => {
+  const originalFetch = global.fetch;
+  let callCount = 0;
+  try {
+    global.fetch = async () => {
+      callCount++;
+      if (callCount === 1) throw new Error('API timeout');
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: JSON.stringify({
+                filesAnalyzed: ['src/Ok.res'],
+                keyChanges: [],
+                riskAreas: [],
+                newImports: [],
+                removedImports: [],
+              }),
+            },
+          }],
+        }),
+      };
+    };
+
+    const client = { apiKey: 'test-key', model: 'test', baseURL: 'http://localhost' };
+    const chunks = ['diff --git a/fail\n+x', 'diff --git a/ok\n+y'];
+    const result = await analyzeCodeChunks(client, chunks, 2);
+
+    assertEqual(result.failedChunks, 1, 'Should track failed chunk count');
+    assertEqual(result.totalFiles, 1, 'Only successful chunk should contribute');
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+testAsync('analyzeCodeChunks deduplicates imports', async () => {
+  const originalFetch = global.fetch;
+  try {
+    global.fetch = async () => ({
+      ok: true,
+      json: async () => ({
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              filesAnalyzed: ['a.res'],
+              keyChanges: [],
+              riskAreas: [],
+              newImports: ['lodash', 'react'],
+              removedImports: ['moment'],
+            }),
+          },
+        }],
+      }),
+    });
+
+    const client = { apiKey: 'test-key', model: 'test', baseURL: 'http://localhost' };
+    const chunks = ['chunk1', 'chunk2'];
+    const result = await analyzeCodeChunks(client, chunks, 2);
+
+    assertEqual(result.newImports.length, 2, 'Should deduplicate lodash and react');
+    assertEqual(result.removedImports.length, 1, 'Should deduplicate moment');
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+testAsync('analyzeCodeChunks returns null when all chunks fail', async () => {
+  const originalFetch = global.fetch;
+  try {
+    global.fetch = async () => { throw new Error('fail'); };
+
+    const client = { apiKey: 'test-key', model: 'test', baseURL: 'http://localhost' };
+    const result = await analyzeCodeChunks(client, ['chunk1'], 1);
+    assertEqual(result, null, 'Should return null when all chunks fail');
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
 // Run async tests
 async function runAsyncTests() {
   for (const { name, fn } of asyncTests) {
