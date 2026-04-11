@@ -1357,6 +1357,229 @@ testAsync('orchestrate runPipeline: file mode produces all outputs', async () =>
   assertTrue(results[1].issues !== undefined, 'JSON should have issues');
 });
 
+// ============================================================
+// cleanModuleName tests (Fix 2 — strip loader prefixes, query strings, concatenation suffixes)
+// ============================================================
+const { cleanModuleName } = require('../lib/stats-parser');
+
+test('cleanModuleName strips single loader prefix', () => {
+  assertEqual(cleanModuleName('css-loader!./src/App.css'), 'src/App.css');
+});
+
+test('cleanModuleName strips chained loader prefixes', () => {
+  assertEqual(cleanModuleName('style-loader!css-loader!./src/App.css'), 'src/App.css');
+});
+
+test('cleanModuleName strips loader with options', () => {
+  assertEqual(cleanModuleName('css-loader?modules!./src/App.css'), 'src/App.css');
+});
+
+test('cleanModuleName strips query string from path', () => {
+  assertEqual(cleanModuleName('./src/App.js?v=1'), 'src/App.js');
+});
+
+test('cleanModuleName strips concatenated module suffix', () => {
+  assertEqual(cleanModuleName('./src/App.js + 5 modules'), 'src/App.js');
+});
+
+test('cleanModuleName strips concatenated module suffix (singular)', () => {
+  assertEqual(cleanModuleName('./src/App.js + 1 module'), 'src/App.js');
+});
+
+test('cleanModuleName handles combined loader + query + concat', () => {
+  assertEqual(cleanModuleName('babel-loader!./src/utils.js?foo=bar + 3 modules'), 'src/utils.js');
+});
+
+test('cleanModuleName passes through simple paths', () => {
+  assertEqual(cleanModuleName('./src/index.js'), 'src/index.js');
+});
+
+test('cleanModuleName handles multi prefix', () => {
+  assertEqual(cleanModuleName('multi ./src/polyfills.js ./src/index.js'), 'src/polyfills.js ./src/index.js');
+});
+
+// ============================================================
+// normalizeGroupingKey tests (Fix 3 — deduplication safety net)
+// ============================================================
+const { normalizeGroupingKey } = require('../lib/diff-engine');
+
+test('normalizeGroupingKey strips loader prefix', () => {
+  assertEqual(normalizeGroupingKey('css-loader!./src/App.css'), 'src/App.css');
+});
+
+test('normalizeGroupingKey strips query string', () => {
+  assertEqual(normalizeGroupingKey('./src/App.js?v=1'), 'src/App.js');
+});
+
+test('normalizeGroupingKey strips concatenated modules suffix', () => {
+  assertEqual(normalizeGroupingKey('./src/App.js + 5 modules'), 'src/App.js');
+});
+
+test('normalizeGroupingKey leaves package names intact', () => {
+  assertEqual(normalizeGroupingKey('lodash'), 'lodash');
+});
+
+test('normalizeGroupingKey leaves scoped package names intact', () => {
+  assertEqual(normalizeGroupingKey('@babel/runtime'), '@babel/runtime');
+});
+
+// ============================================================
+// Noise threshold tests (Fix 1 — small diffs treated as unchanged)
+// ============================================================
+
+test('computeAssetDiff treats tiny changes as unchanged (noise threshold)', () => {
+  const base = [{ name: 'main.js', size: 1000 }];
+  const pr = [{ name: 'main.js', size: 1004 }]; // 4 bytes diff — below 10-byte threshold
+  const result = computeAssetDiff(base, pr);
+  const mainAsset = result.find(a => a.name === 'main.js');
+  assertEqual(mainAsset.type, 'unchanged', 'Tiny diff should be unchanged');
+  assertEqual(mainAsset.change, 0, 'Noise change should be zeroed');
+});
+
+test('computeAssetDiff keeps genuine changes above noise threshold', () => {
+  const base = [{ name: 'main.js', size: 1000 }];
+  const pr = [{ name: 'main.js', size: 1050 }]; // 50 bytes — above threshold
+  const result = computeAssetDiff(base, pr);
+  const mainAsset = result.find(a => a.name === 'main.js');
+  assertEqual(mainAsset.type, 'changed', 'Significant diff should be changed');
+  assertEqual(mainAsset.change, 50, 'Change should be 50');
+});
+
+test('computeEntrypointDiff treats tiny changes as unchanged (noise threshold)', () => {
+  const base = [{ name: 'app', assetsSize: 5000 }];
+  const pr = [{ name: 'app', assetsSize: 4998 }]; // -2 bytes — below threshold
+  const result = computeEntrypointDiff(base, pr);
+  const appEp = result.find(e => e.name === 'app');
+  assertEqual(appEp.type, 'unchanged', 'Tiny diff should be unchanged');
+  assertEqual(appEp.change, 0, 'Noise change should be zeroed');
+});
+
+test('computeEntrypointDiff keeps genuine changes above noise threshold', () => {
+  const base = [{ name: 'app', assetsSize: 5000 }];
+  const pr = [{ name: 'app', assetsSize: 4980 }]; // -20 bytes — above threshold
+  const result = computeEntrypointDiff(base, pr);
+  const appEp = result.find(e => e.name === 'app');
+  assertEqual(appEp.type, 'changed', 'Significant diff should be changed');
+  assertEqual(appEp.change, -20, 'Change should be -20');
+});
+
+// ============================================================
+// Deduplication in computeAssetReasons (Fix 3 — integrated test)
+// ============================================================
+
+test('computeAssetReasons deduplicates module variants into single contributor', () => {
+  const assetDiff = [{
+    name: 'main.js',
+    type: 'changed',
+    baseSize: 1000,
+    prSize: 1100,
+    change: 100,
+    chunks: [1],
+  }];
+  // Two module changes that are the same file but with different webpack names
+  const moduleChanges = [
+    { name: 'src/App.js', packageName: null, change: 60, chunks: [1] },
+    { name: 'css-loader!./src/App.js', packageName: null, change: 40, chunks: [1] },
+  ];
+  const baseChunkToAssets = new Map([[1, ['main.js']]]);
+  const prChunkToAssets = new Map([[1, ['main.js']]]);
+
+  computeAssetReasons(assetDiff, moduleChanges, baseChunkToAssets, prChunkToAssets, 3);
+
+  assertEqual(assetDiff[0].reasons.length, 1, 'Should deduplicate into single contributor');
+  assertEqual(assetDiff[0].reasons[0].name, 'src/App.js', 'Contributor name should be cleaned');
+  assertEqual(assetDiff[0].reasons[0].change, 100, 'Changes should be summed');
+});
+
+// ============================================================
+// code-diff.js tests
+// ============================================================
+console.log('\n--- Testing code-diff.js ---');
+const { parseDiffStats, chunkDiff } = require('../lib/code-diff');
+
+test('parseDiffStats parses a simple unified diff', () => {
+  const diff = [
+    'diff --git a/src/Foo.res b/src/Foo.res',
+    'index abc123..def456 100644',
+    '--- a/src/Foo.res',
+    '+++ b/src/Foo.res',
+    '@@ -1,3 +1,5 @@',
+    ' let x = 1',
+    '+let y = 2',
+    '+let z = 3',
+    ' let w = 4',
+    '-let old = 5',
+  ].join('\n');
+  const stats = parseDiffStats(diff);
+  assertEqual(stats.length, 1, 'Should have one file');
+  assertEqual(stats[0].filePath, 'src/Foo.res');
+  assertEqual(stats[0].linesAdded, 2);
+  assertEqual(stats[0].linesRemoved, 1);
+  assertFalse(stats[0].isBinary);
+});
+
+test('parseDiffStats handles multiple files', () => {
+  const diff = [
+    'diff --git a/src/A.res b/src/A.res',
+    '--- a/src/A.res',
+    '+++ b/src/A.res',
+    '@@ -1,2 +1,3 @@',
+    ' line1',
+    '+added',
+    'diff --git a/src/B.js b/src/B.js',
+    '--- a/src/B.js',
+    '+++ b/src/B.js',
+    '@@ -1,3 +1,2 @@',
+    ' line1',
+    '-removed1',
+    '-removed2',
+  ].join('\n');
+  const stats = parseDiffStats(diff);
+  assertEqual(stats.length, 2);
+  assertEqual(stats[0].filePath, 'src/A.res');
+  assertEqual(stats[0].linesAdded, 1);
+  assertEqual(stats[0].linesRemoved, 0);
+  assertEqual(stats[1].filePath, 'src/B.js');
+  assertEqual(stats[1].linesAdded, 0);
+  assertEqual(stats[1].linesRemoved, 2);
+});
+
+test('parseDiffStats detects binary files', () => {
+  const diff = [
+    'diff --git a/icon.png b/icon.png',
+    'Binary files a/icon.png and b/icon.png differ',
+  ].join('\n');
+  const stats = parseDiffStats(diff);
+  assertEqual(stats.length, 1);
+  assertEqual(stats[0].filePath, 'icon.png');
+  assertTrue(stats[0].isBinary);
+  assertEqual(stats[0].linesAdded, 0);
+  assertEqual(stats[0].linesRemoved, 0);
+});
+
+test('parseDiffStats returns empty array for empty input', () => {
+  const stats = parseDiffStats('');
+  assertEqual(stats.length, 0);
+});
+
+test('parseDiffStats handles new file (no a/ prefix)', () => {
+  const diff = [
+    'diff --git a/src/New.res b/src/New.res',
+    'new file mode 100644',
+    '--- /dev/null',
+    '+++ b/src/New.res',
+    '@@ -0,0 +1,3 @@',
+    '+line1',
+    '+line2',
+    '+line3',
+  ].join('\n');
+  const stats = parseDiffStats(diff);
+  assertEqual(stats.length, 1);
+  assertEqual(stats[0].filePath, 'src/New.res');
+  assertEqual(stats[0].linesAdded, 3);
+  assertEqual(stats[0].linesRemoved, 0);
+});
+
 // Run async tests
 async function runAsyncTests() {
   for (const { name, fn } of asyncTests) {
