@@ -1764,6 +1764,84 @@ test('analyzeCodeChunks is exported', () => {
   assertEqual(typeof analyzeCodeChunks, 'function');
 });
 
+test('buildAnalysisPrompt includes Code Change Analysis when codeDiffSummary is present', () => {
+  const { buildAnalysisPrompt } = require('../lib/ai-client');
+  const diff = {
+    totalChange: 1000,
+    nodeModulesChange: 500,
+    allChanges: [],
+    topChanges: [],
+    packageDiffs: {},
+    totalDiffFormatted: '+1.00 KB',
+    prSize: 2000,
+    baseSize: 1000,
+    nodeModulesDiff: 500,
+  };
+  const detections = { violations: [] };
+  const context = {
+    linesChanged: 42,
+    codeDiffSummary: {
+      totalFiles: 5,
+      keyChanges: [{ file: 'src/Foo.res', description: 'Added feature', type: 'feature' }],
+      riskAreas: [{ file: 'src/Foo.res', risk: 'Large import', severity: 'high' }],
+      newImports: ['lodash'],
+      removedImports: ['moment'],
+      failedChunks: 0,
+    },
+    fileStats: [
+      { filePath: 'lib/js/Foo.js', linesAdded: 10, linesRemoved: 5, isBinary: false },
+    ],
+  };
+
+  const prompt = buildAnalysisPrompt(diff, detections, context);
+  assertTrue(prompt.includes('## Code Change Analysis'), 'Should include Code Change Analysis section');
+  assertTrue(prompt.includes('[feature] src/Foo.res'), 'Should include key changes');
+  assertTrue(prompt.includes('[high] src/Foo.res'), 'Should include risk areas');
+  assertTrue(prompt.includes('lodash'), 'Should include new imports');
+  assertTrue(prompt.includes('moment'), 'Should include removed imports');
+  assertTrue(prompt.includes('Files Changed: 42'), 'Should show auto-computed linesChanged');
+});
+
+test('buildAnalysisPrompt omits Code Change Analysis when no codeDiffSummary', () => {
+  const { buildAnalysisPrompt } = require('../lib/ai-client');
+  const diff = {
+    totalChange: 0, nodeModulesChange: 0, allChanges: [], topChanges: [],
+    packageDiffs: {}, totalDiffFormatted: '0 B', prSize: 0, baseSize: 0, nodeModulesDiff: 0,
+  };
+  const detections = { violations: [] };
+  const context = {};
+
+  const prompt = buildAnalysisPrompt(diff, detections, context);
+  assertFalse(prompt.includes('## Code Change Analysis'), 'Should NOT include Code Change Analysis');
+});
+
+test('buildAnalysisPrompt includes compiled JS changes from fileStats', () => {
+  const { buildAnalysisPrompt } = require('../lib/ai-client');
+  const diff = {
+    totalChange: 0, nodeModulesChange: 0, allChanges: [], topChanges: [],
+    packageDiffs: {}, totalDiffFormatted: '0 B', prSize: 0, baseSize: 0, nodeModulesDiff: 0,
+  };
+  const detections = { violations: [] };
+  const context = {
+    codeDiffSummary: {
+      totalFiles: 1,
+      keyChanges: [],
+      riskAreas: [],
+      newImports: [],
+      removedImports: [],
+      failedChunks: 0,
+    },
+    fileStats: [
+      { filePath: 'lib/js/A.js', linesAdded: 20, linesRemoved: 5, isBinary: false },
+      { filePath: 'lib/js/B.js', linesAdded: 3, linesRemoved: 0, isBinary: false },
+    ],
+    linesChanged: 10,
+  };
+
+  const prompt = buildAnalysisPrompt(diff, detections, context);
+  assertTrue(prompt.includes('Compiled JS Changes'), 'Should include compiled JS section');
+});
+
 testAsync('analyzeCodeChunks merges multiple chunk results', async () => {
   const originalFetch = global.fetch;
   try {
