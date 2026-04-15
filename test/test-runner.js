@@ -55,7 +55,7 @@ console.log('Running Bundle AI Tests\n');
 
 // Test stats-parser
 console.log('--- Testing stats-parser.js ---');
-const { parseStats, isNodeModule, extractPackageName, formatBytes, parseAssets, parseEntrypoints, isDeliverableAsset, buildChunkToAssetsMap } = require('../lib/stats-parser');
+const { parseStats, isNodeModule, extractPackageName, formatBytes, parseAssets, parseEntrypoints, isDeliverableAsset, buildChunkToAssetsMap, buildChunkNameToAssetsMap, buildChunkIdToNameMap } = require('../lib/stats-parser');
 
 test('parseStats parses webpack stats correctly', () => {
   const sampleStats = JSON.parse(fs.readFileSync(path.join(__dirname, 'sample-base-stats.json'), 'utf-8'));
@@ -222,7 +222,7 @@ test('parseEntrypoints computes compressed sizes', () => {
 
 // Test diff-engine
 console.log('\n--- Testing diff-engine.js ---');
-const { computeDiff, generateSummary, computeAssetDiff, computeEntrypointDiff, computeAssetReasons, computeEntrypointReasons } = require('../lib/diff-engine');
+const { computeDiff, generateSummary, computeAssetDiff, computeEntrypointDiff, computeAssetReasons, computeEntrypointReasons, selectBalancedTopContributors } = require('../lib/diff-engine');
 
 test('computeDiff calculates size differences', () => {
   const baseStats = parseStats(JSON.parse(fs.readFileSync(path.join(__dirname, 'sample-base-stats.json'), 'utf-8')));
@@ -408,6 +408,181 @@ test('computeAssetReasons groups node_modules by package name', () => {
   assertTrue(reasonNames.includes('lodash'), 'Should include lodash package');
   // chart.js and NewFeature.js should also be present (top 3)
   assertTrue(mainAsset.reasons.length <= 3, 'Should have at most 3 reasons (top N)');
+});
+
+// Tests for chunk-name-based matching (stable across builds)
+test('buildChunkNameToAssetsMap maps chunk names to deliverable asset filenames', () => {
+  const sampleStats = JSON.parse(fs.readFileSync(path.join(__dirname, 'sample-pr-stats.json'), 'utf-8'));
+  const map = buildChunkNameToAssetsMap(sampleStats);
+
+  assertTrue(Array.isArray(map['main']), 'Should have mapping for chunk name "main"');
+  assertTrue(map['main'].includes('main.bundle.js'), '"main" chunk should map to main.bundle.js');
+  assertTrue(Array.isArray(map['vendor']), 'Should have mapping for chunk name "vendor"');
+  assertTrue(map['vendor'].includes('vendor.bundle.js'), '"vendor" chunk should map to vendor.bundle.js');
+  assertTrue(Array.isArray(map['hs-sdk-sw']), 'Should have mapping for chunk name "hs-sdk-sw"');
+  assertTrue(map['hs-sdk-sw'].includes('sw.bundle.js'), '"hs-sdk-sw" chunk should map to sw.bundle.js');
+  // Non-deliverable files should be filtered
+  assertFalse((map['hs-sdk-sw'] || []).includes('sw.bundle.js.LICENSE.txt'), 'Should NOT include LICENSE.txt');
+});
+
+test('buildChunkIdToNameMap maps numeric IDs to chunk names', () => {
+  const sampleStats = JSON.parse(fs.readFileSync(path.join(__dirname, 'sample-pr-stats.json'), 'utf-8'));
+  const map = buildChunkIdToNameMap(sampleStats);
+
+  assertEqual(map[0], 'main', 'Chunk 0 should be named "main"');
+  assertEqual(map[1], 'vendor', 'Chunk 1 should be named "vendor"');
+  assertEqual(map[2], 'hs-sdk-sw', 'Chunk 2 should be named "hs-sdk-sw"');
+});
+
+test('parseModule populates chunkNames when chunkIdToName is provided', () => {
+  const { parseModule: parseModuleFn } = require('../lib/stats-parser');
+  const chunkIdToName = { 0: 'main', 1: 'vendor', 2: 'hs-sdk-sw' };
+  const rawModule = { name: './src/index.js', size: 1024, chunks: [0], reasons: [] };
+  const parsed = parseModuleFn(rawModule, chunkIdToName);
+
+  assertTrue(Array.isArray(parsed.chunkNames), 'Should have chunkNames array');
+  assertEqual(parsed.chunkNames.length, 1, 'Should have one chunk name');
+  assertEqual(parsed.chunkNames[0], 'main', 'Should resolve to "main"');
+});
+
+test('parseModule returns empty chunkNames when no lookup provided', () => {
+  const { parseModule: parseModuleFn } = require('../lib/stats-parser');
+  const rawModule = { name: './src/index.js', size: 1024, chunks: [0], reasons: [] };
+  const parsed = parseModuleFn(rawModule);
+
+  assertTrue(Array.isArray(parsed.chunkNames), 'Should have chunkNames array');
+  assertEqual(parsed.chunkNames.length, 0, 'Should be empty without lookup');
+});
+
+test('parseStats populates chunkNames on parsed modules', () => {
+  const sampleStats = JSON.parse(fs.readFileSync(path.join(__dirname, 'sample-pr-stats.json'), 'utf-8'));
+  const parsed = parseStats(sampleStats);
+
+  // Service worker module should have chunkNames: ["hs-sdk-sw"]
+  const swModule = parsed.modules.find(m => m.name.includes('service-worker'));
+  assertTrue(!!swModule, 'Should find service-worker module');
+  assertTrue(Array.isArray(swModule.chunkNames), 'Should have chunkNames');
+  assertTrue(swModule.chunkNames.includes('hs-sdk-sw'), 'SW module should belong to hs-sdk-sw chunk');
+  assertFalse(swModule.chunkNames.includes('main'), 'SW module should NOT belong to main chunk');
+
+  // index.js should have chunkNames: ["main"]
+  const indexModule = parsed.modules.find(m => m.name.includes('index.js') && !m.name.includes('node_modules'));
+  assertTrue(!!indexModule, 'Should find index.js module');
+  assertTrue(indexModule.chunkNames.includes('main'), 'index.js should belong to main chunk');
+});
+
+test('parseStats includes chunkNameToAssets in result', () => {
+  const sampleStats = JSON.parse(fs.readFileSync(path.join(__dirname, 'sample-pr-stats.json'), 'utf-8'));
+  const parsed = parseStats(sampleStats);
+
+  assertTrue(!!parsed.chunkNameToAssets, 'Should have chunkNameToAssets');
+  assertTrue(Array.isArray(parsed.chunkNameToAssets['main']), 'Should have "main" mapping');
+  assertTrue(parsed.chunkNameToAssets['main'].includes('main.bundle.js'), '"main" should map to main.bundle.js');
+});
+
+test('computeAssetReasons uses chunk names for attribution when available', () => {
+  // Create a scenario where chunk IDs are DIFFERENT between base and PR
+  // but chunk names are stable — verifying that chunk-name matching is used
+  const baseModules = [
+    { name: './src/App.js', size: 3000, chunks: [0], chunkNames: ['main'] },
+  ];
+  const prModules = [
+    { name: './src/App.js', size: 4000, chunks: [5], chunkNames: ['main'] },  // Different chunk ID!
+  ];
+
+  // Module change: App.js went from 3000 to 4000 (+1000)
+  // In PR, it has chunk ID 5. In base, chunk ID 0.
+  const moduleChanges = [{
+    name: 'src/App.js',
+    oldSize: 3000,
+    newSize: 4000,
+    change: 1000,
+    changeFormatted: '+1000 B',
+    type: 'changed',
+    isNodeModule: false,
+    packageName: null,
+    chunks: [5],       // PR chunk ID (different from base)
+    chunkNames: ['main'], // Stable chunk name
+    importChain: [],
+  }];
+
+  // chunkIdToAssets: IDs shifted between builds
+  const baseChunkToAssets = { 0: ['app.js'] };   // chunk 0 = app.js in base
+  const prChunkToAssets = { 5: ['app.js'] };     // chunk 5 = app.js in PR
+
+  // chunkNameToAssets: names are stable
+  const baseChunkNameToAssets = { main: ['app.js'] };
+  const prChunkNameToAssets = { main: ['app.js'] };
+
+  const assetDiff = [{
+    name: 'app.js',
+    baseSize: 50000,
+    prSize: 51000,
+    change: 1000,
+    changeFormatted: '+1000 B',
+    type: 'changed',
+    baseGzip: 15000,
+    prGzip: 15300,
+    gzipChange: 300,
+    chunkNames: ['main'],
+    chunks: [],
+    reasons: [],
+  }];
+
+  computeAssetReasons(assetDiff, moduleChanges, baseChunkToAssets, prChunkToAssets, 3, baseChunkNameToAssets, prChunkNameToAssets);
+
+  assertTrue(assetDiff[0].reasons.length > 0, 'Should attribute App.js to app.js via chunk name');
+  assertEqual(assetDiff[0].reasons[0].name, 'src/App.js', 'Should attribute src/App.js');
+  assertEqual(assetDiff[0].reasons[0].change, 1000, 'Change should be +1000');
+});
+
+test('computeAssetReasons does NOT misattribute via stale chunk IDs', () => {
+  // Scenario: chunk ID 0 maps to app.js in base, but maps to sw.js in PR
+  // A module in the PR has chunk ID 0 → without chunk-name matching, it
+  // would be wrongly attributed to app.js (via base's chunk ID 0 mapping)
+  const moduleChanges = [{
+    name: 'src/service-worker.js',
+    oldSize: 0,
+    newSize: 5000,
+    change: 5000,
+    changeFormatted: '+5000 B',
+    type: 'added',
+    isNodeModule: false,
+    packageName: null,
+    chunks: [3],            // PR chunk ID
+    chunkNames: ['sw'],     // Chunk name: sw
+    importChain: [],
+  }];
+
+  // Chunk ID overlap: both base and PR have chunk 0, but they map to different assets
+  const baseChunkToAssets = { 0: ['app.js'], 1: ['vendor.js'] };
+  const prChunkToAssets = { 0: ['sw.js'], 2: ['app.js'], 3: ['sw.js'] };
+
+  // Names are stable and unambiguous
+  const baseChunkNameToAssets = { main: ['app.js'], vendor: ['vendor.js'] };
+  const prChunkNameToAssets = { main: ['app.js'], vendor: ['vendor.js'], sw: ['sw.js'] };
+
+  const assetDiff = [
+    {
+      name: 'app.js', baseSize: 50000, prSize: 50000, change: 0,
+      changeFormatted: '0 B', type: 'changed', // small change still considered "changed"
+      baseGzip: 15000, prGzip: 15000, gzipChange: 0,
+      chunkNames: ['main'], chunks: [], reasons: [],
+    },
+    {
+      name: 'sw.js', baseSize: 0, prSize: 10000, change: 10000,
+      changeFormatted: '+10 KB', type: 'added',
+      baseGzip: 0, prGzip: 3000, gzipChange: 3000,
+      chunkNames: ['sw'], chunks: [], reasons: [],
+    },
+  ];
+
+  computeAssetReasons(assetDiff, moduleChanges, baseChunkToAssets, prChunkToAssets, 3, baseChunkNameToAssets, prChunkNameToAssets);
+
+  // app.js should NOT have the service-worker module attributed to it
+  assertEqual(assetDiff[0].reasons.length, 0, 'app.js should have no misattributed reasons');
+  // sw.js is "added" so it gets empty reasons by design
+  assertEqual(assetDiff[1].reasons.length, 0, 'added asset gets empty reasons');
 });
 
 // Test diff.js report functions
@@ -921,15 +1096,12 @@ test('computeDiff produces entrypoint reasons end-to-end', () => {
   // Reasons may be empty if no module changes match app's chunks, but the field must exist
 });
 
-test('computeDiff includes gzip size data', () => {
+test('computeDiff includes gzip size data on assets', () => {
   const baseStats = parseStats(JSON.parse(fs.readFileSync(path.join(__dirname, 'sample-base-stats.json'), 'utf-8')));
   const prStats = parseStats(JSON.parse(fs.readFileSync(path.join(__dirname, 'sample-pr-stats.json'), 'utf-8')));
   const diff = computeDiff(baseStats, prStats);
 
-  assertTrue(diff.baseGzipSize > 0, 'Base gzip size should be positive');
-  assertTrue(diff.prGzipSize > 0, 'PR gzip size should be positive');
-  assertTrue(diff.prGzipSize > diff.baseGzipSize, 'PR gzip should be larger (PR added assets)');
-
+  // Gzip data is still available on individual asset objects (for ai-client, analyze, diff.js)
   const mainAsset = diff.assetDiff.find(a => a.name === 'main.bundle.js');
   assertTrue(mainAsset.baseGzip > 0, 'Asset should have base gzip');
   assertTrue(mainAsset.prGzip > 0, 'Asset should have PR gzip');
@@ -1011,7 +1183,7 @@ test('detectDuplicateDependencies is critical for large waste', () => {
 // Test comment.js gzip and duplicates
 console.log('\n--- Testing comment.js gzip and duplicates ---');
 
-test('generateComment includes Gzip column in asset table', () => {
+test('generateComment does not include Gzip column (uses pre-minify sizes)', () => {
   const { generateComment } = require('../scripts/comment');
   const analysis = {
     diff: {
@@ -1025,7 +1197,6 @@ test('generateComment includes Gzip column in asset table', () => {
       ],
       entrypointDiff: [],
       baseAssetSize: 100000, prAssetSize: 120000, totalAssetDiff: 20000,
-      prGzipSize: 36000,
       newDuplicates: [],
     },
     summary: {},
@@ -1033,7 +1204,9 @@ test('generateComment includes Gzip column in asset table', () => {
     issues: { violations: [], critical: [], warnings: [], info: [] },
   };
   const comment = generateComment(analysis);
-  assertTrue(comment.includes('Gzip'), 'Should have Gzip column header');
+  assertTrue(!comment.includes('Gzip'), 'Should NOT have Gzip column header (removed for pre-minify consistency)');
+  assertTrue(comment.includes('Top Contributors'), 'Should have Top Contributors column header');
+  assertTrue(!comment.includes('pre-minify'), 'Should NOT have pre-minify qualifier (everything is pre-minify now)');
 });
 
 test('generateComment includes duplicate dependencies section', () => {
@@ -1162,9 +1335,7 @@ test('full pipeline: compressed sizes and duplicates flow through computeDiff', 
   // Compute diff
   const diff = computeDiff(baseStats, prStats);
 
-  // Verify gzip fields flow through
-  assertTrue(diff.prGzipSize > 0, 'Diff should have PR gzip size');
-  assertTrue(diff.baseGzipSize > 0, 'Diff should have base gzip size');
+  // Gzip data is still on individual assets (for ai-client, analyze, diff.js)
   const mainAsset = diff.assetDiff.find(a => a.name === 'main.bundle.js');
   assertTrue(mainAsset.prGzip > 0, 'Asset diff should have prGzip');
 
@@ -1540,6 +1711,185 @@ test('computeAssetReasons deduplicates module variants into single contributor',
   assertEqual(assetDiff[0].reasons.length, 1, 'Should deduplicate into single contributor');
   assertEqual(assetDiff[0].reasons[0].name, 'src/App.js', 'Contributor name should be cleaned');
   assertEqual(assetDiff[0].reasons[0].change, 100, 'Changes should be summed');
+});
+
+// selectBalancedTopContributors tests
+console.log('\n--- Testing selectBalancedTopContributors ---');
+
+test('selectBalancedTopContributors returns all entries when <= topN', () => {
+  const grouped = new Map([['a', 100], ['b', -50]]);
+  const result = selectBalancedTopContributors(grouped, 3);
+  assertEqual(result.length, 2, 'Should return both entries');
+});
+
+test('selectBalancedTopContributors ensures both positive and negative are represented', () => {
+  // Simulates the real bug: asset grew +1KB but top 3 absolute are all negative
+  const grouped = new Map([
+    ['serviceWorker.bs.js', 30000],   // +30 KB (new feature)
+    ['LoggerUtils.bs.js', -10000],    // -10 KB (removed)
+    ['@rescript/core', -4500],        // -4.5 KB (removed)
+    ['rescript', -2400],              // -2.4 KB (removed)
+    ['index.js', 150],               // +150 B (small change)
+  ]);
+  const result = selectBalancedTopContributors(grouped, 3);
+  const positives = result.filter(([, v]) => v > 0);
+  const negatives = result.filter(([, v]) => v < 0);
+  assertTrue(positives.length >= 1, 'Must include at least one positive contributor');
+  assertTrue(negatives.length >= 1, 'Must include at least one negative contributor');
+  assertEqual(result.length, 3, 'Should return exactly topN entries');
+});
+
+test('selectBalancedTopContributors works with only positive changes', () => {
+  const grouped = new Map([['a', 500], ['b', 300], ['c', 200], ['d', 100]]);
+  const result = selectBalancedTopContributors(grouped, 3);
+  assertEqual(result.length, 3);
+  assertEqual(result[0][0], 'a', 'Largest positive first');
+});
+
+test('selectBalancedTopContributors works with only negative changes', () => {
+  const grouped = new Map([['a', -500], ['b', -300], ['c', -200], ['d', -100]]);
+  const result = selectBalancedTopContributors(grouped, 3);
+  assertEqual(result.length, 3);
+  assertEqual(result[0][0], 'a', 'Largest negative first');
+});
+
+test('selectBalancedTopContributors filters out zero-change entries', () => {
+  const grouped = new Map([['a', 100], ['b', 0], ['c', -50]]);
+  const result = selectBalancedTopContributors(grouped, 3);
+  assertEqual(result.length, 2, 'Should exclude zero-change entry');
+});
+
+test('selectBalancedTopContributors sorts result by absolute magnitude', () => {
+  const grouped = new Map([
+    ['big-positive', 5000],
+    ['big-negative', -10000],
+    ['small-positive', 100],
+    ['medium-negative', -3000],
+  ]);
+  const result = selectBalancedTopContributors(grouped, 3);
+  // Should be sorted: -10000, 5000, -3000
+  assertEqual(result[0][0], 'big-negative');
+  assertEqual(result[1][0], 'big-positive');
+  assertEqual(result[2][0], 'medium-negative');
+});
+
+// reasonsMeta tests
+console.log('\n--- Testing reasonsMeta ---');
+
+test('computeAssetReasons attaches reasonsMeta with totalCount and netChange', () => {
+  const assetDiff = [{
+    name: 'app.js',
+    type: 'changed',
+    baseSize: 100000,
+    prSize: 101100,
+    change: 1100,
+    chunks: [1],
+  }];
+  const moduleChanges = [
+    { name: 'src/ServiceWorker.bs.js', packageName: null, change: 30000, chunks: [1] },
+    { name: 'src/LoggerUtils.bs.js', packageName: null, change: -10000, chunks: [1] },
+    { name: 'node_modules/@rescript/core/Core__Option.bs.js', packageName: '@rescript/core', change: -4500, chunks: [1] },
+    { name: 'node_modules/rescript/lib/es6/caml_option.js', packageName: 'rescript', change: -2400, chunks: [1] },
+    { name: 'src/index.js', packageName: null, change: 150, chunks: [1] },
+    { name: 'src/Window.bs.js', packageName: null, change: 96, chunks: [1] },
+  ];
+  const baseChunkToAssets = { 1: ['app.js'] };
+  const prChunkToAssets = { 1: ['app.js'] };
+
+  computeAssetReasons(assetDiff, moduleChanges, baseChunkToAssets, prChunkToAssets, 3);
+
+  const meta = assetDiff[0].reasonsMeta;
+  assertTrue(meta !== undefined, 'reasonsMeta should be attached');
+  assertEqual(meta.totalCount, 6, 'totalCount should count all non-zero grouped contributors');
+  // Net: 30000 - 10000 - 4500 - 2400 + 150 + 96 = 13346
+  assertEqual(meta.netChange, 13346, 'netChange should be net sum of all contributors');
+  assertEqual(assetDiff[0].reasons.length, 3, 'Should still only show top 3 reasons');
+});
+
+test('computeAssetReasons reasonsMeta not set for new/removed/unchanged assets', () => {
+  const assetDiff = [
+    { name: 'new.js', type: 'added', baseSize: 0, prSize: 1000, change: 1000, chunks: [] },
+    { name: 'old.js', type: 'removed', baseSize: 1000, prSize: 0, change: -1000, chunks: [] },
+    { name: 'same.js', type: 'unchanged', baseSize: 1000, prSize: 1000, change: 0, chunks: [] },
+  ];
+  computeAssetReasons(assetDiff, [], {}, {}, 3);
+  assertTrue(assetDiff[0].reasonsMeta === undefined, 'New asset should not have reasonsMeta');
+  assertTrue(assetDiff[1].reasonsMeta === undefined, 'Removed asset should not have reasonsMeta');
+  assertTrue(assetDiff[2].reasonsMeta === undefined, 'Unchanged asset should not have reasonsMeta');
+});
+
+test('comment.js formatAssetReasons shows others summary when contributors exceed topN', () => {
+  const { generateComment } = require('../scripts/comment');
+  // Build a minimal analysis with an asset that has more contributors than shown
+  const analysis = {
+    diff: {
+      baseAssetSize: 100000,
+      prAssetSize: 101100,
+      totalAssetDiff: 1100,
+      baseAssetSizeFormatted: '97.66 KB',
+      prAssetSizeFormatted: '98.73 KB',
+      nodeModulesDiff: -6000,
+      assetDiff: [{
+        name: 'app.js',
+        type: 'changed',
+        baseSize: 100000,
+        prSize: 101100,
+        change: 1100,
+        changeFormatted: '+1.07 KB',
+        baseGzip: 30000,
+        prGzip: 30300,
+        gzipChange: 300,
+        reasons: [
+          { name: 'src/LoggerUtils.bs.js', change: -10000, changeFormatted: '-9.77 KB', type: 'removed' },
+          { name: '@rescript/core', change: -4500, changeFormatted: '-4.39 KB', type: 'removed' },
+          { name: 'src/index.js', change: 150, changeFormatted: '+150 B', type: 'added' },
+        ],
+        reasonsMeta: { totalCount: 6, netChange: 13346 },
+      }],
+      entrypointDiff: [],
+      newDuplicates: [],
+    },
+    ai: { verdict: 'expected', confidence: 0.9, explanation: 'OK', rootCause: 'None', suggestedFixes: [] },
+    detections: { critical: [], warnings: [], info: [], violations: [] },
+  };
+  const comment = generateComment(analysis);
+  assertTrue(comment.includes('and 3 others'), 'Should mention the number of hidden contributors');
+  assertTrue(comment.includes('net +13.03 KB'), 'Should show net change');
+});
+
+test('comment.js formatAssetReasons omits others when all contributors shown', () => {
+  const { generateComment } = require('../scripts/comment');
+  const analysis = {
+    diff: {
+      baseAssetSize: 100000,
+      prAssetSize: 100100,
+      totalAssetDiff: 100,
+      baseAssetSizeFormatted: '97.66 KB',
+      prAssetSizeFormatted: '97.75 KB',
+      nodeModulesDiff: 0,
+      assetDiff: [{
+        name: 'app.js',
+        type: 'changed',
+        baseSize: 100000,
+        prSize: 100100,
+        change: 100,
+        changeFormatted: '+100 B',
+        baseGzip: 30000,
+        prGzip: 30030,
+        gzipChange: 30,
+        reasons: [
+          { name: 'src/App.js', change: 100, changeFormatted: '+100 B', type: 'added' },
+        ],
+        reasonsMeta: { totalCount: 1, netChange: 100 },
+      }],
+      entrypointDiff: [],
+      newDuplicates: [],
+    },
+    ai: { verdict: 'expected', confidence: 0.9, explanation: 'OK', rootCause: 'None', suggestedFixes: [] },
+    detections: { critical: [], warnings: [], info: [], violations: [] },
+  };
+  const comment = generateComment(analysis);
+  assertFalse(comment.includes('others'), 'Should not mention others when all are shown');
 });
 
 // ============================================================

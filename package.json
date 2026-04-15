@@ -12,7 +12,8 @@
     "diff": "node scripts/diff.js",
     "analyze-stats": "node scripts/analyze.js",
     "generate-comment": "node scripts/comment.js",
-    "test": "node test/test-runner.js"
+    "test": "node test/test-runner.js",
+    "submodule:update": "git -C hyperswitch-web checkout main && git -C hyperswitch-web pull origin main"
   },
   "keywords": [
     "webpack",

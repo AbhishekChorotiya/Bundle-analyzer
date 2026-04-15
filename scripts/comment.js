@@ -46,18 +46,20 @@ function generateComment(analysis, options = {}) {
   lines.push('## 📦 Bundle Analysis Report');
   lines.push('');
 
-  // Summary table
-  const baseSizeFormatted = summary.baseSizeFormatted || formatBytes(summary.baseSize || 0);
-  const prSizeFormatted = summary.prSizeFormatted || formatBytes(summary.prSize || 0);
-  const totalDiff = summary.totalDiff || (summary.prSize || 0) - (summary.baseSize || 0);
-  const totalDiffFormatted = summary.totalDiffFormatted || formatBytes(totalDiff, { signed: true });
-  const nodeModulesDiff = summary.nodeModulesDiff || 0;
+  // Summary table — uses pre-minification module-level sizes for consistency with Top Contributors
+  const baseAssetSize = diff.baseAssetSize || summary.baseSize || 0;
+  const prAssetSize = diff.prAssetSize || summary.prSize || 0;
+  const totalAssetDiff = diff.totalAssetDiff || (prAssetSize - baseAssetSize);
+  const baseSizeFormatted = diff.baseAssetSizeFormatted || formatBytes(baseAssetSize);
+  const prSizeFormatted = diff.prAssetSizeFormatted || formatBytes(prAssetSize);
+  const totalDiffFormatted = formatBytes(totalAssetDiff, { signed: true });
+  const nodeModulesDiff = summary.nodeModulesDiff ?? diff.nodeModulesDiff ?? 0;
 
   lines.push('| Metric | Value |');
   lines.push('|--------|-------|');
   lines.push(`| Base Size | ${baseSizeFormatted} |`);
   lines.push(`| PR Size | ${prSizeFormatted} |`);
-  lines.push(`| Change | ${renderSizeChange(totalDiff, totalDiffFormatted)} |`);
+  lines.push(`| Change | ${renderSizeChange(totalAssetDiff, totalDiffFormatted)} |`);
   lines.push(`| node_modules | ${renderSizeChange(nodeModulesDiff, formatBytes(nodeModulesDiff, { signed: true }))} |`);
   lines.push('');
 
@@ -68,8 +70,8 @@ function generateComment(analysis, options = {}) {
   if (significantAssets.length > 0) {
     lines.push('### 📁 Output Files');
     lines.push('');
-    lines.push('| Output File | Base | PR | Gzip | Change | Top Contributors |');
-    lines.push('|-------------|------|-----|------|--------|-----------------|');
+    lines.push('| Output File | Base | PR | Change | Top Contributors |');
+    lines.push('|-------------|------|-----|--------|------------------|');
 
     for (const asset of significantAssets) {
       const baseSizeStr = asset.baseSize > 0 ? formatBytes(asset.baseSize) : '-';
@@ -83,8 +85,7 @@ function generateComment(analysis, options = {}) {
         changeStr = renderSizeChange(asset.change, formatBytes(asset.change, { signed: true }));
       }
       const reasonsStr = formatAssetReasons(asset);
-      const gzipStr = asset.prGzip > 0 ? formatBytes(asset.prGzip) : '-';
-      lines.push(`| \`${truncate(asset.name, 40)}\` | ${baseSizeStr} | ${prSizeStr} | ${gzipStr} | ${changeStr} | ${reasonsStr} |`);
+      lines.push(`| \`${truncate(asset.name, 40)}\` | ${baseSizeStr} | ${prSizeStr} | ${changeStr} | ${reasonsStr} |`);
     }
 
     // Show total asset size summary
@@ -92,7 +93,7 @@ function generateComment(analysis, options = {}) {
     const prAssetSize = diff.prAssetSize || 0;
     const totalAssetDiff = diff.totalAssetDiff || (prAssetSize - baseAssetSize);
     if (baseAssetSize > 0 || prAssetSize > 0) {
-      lines.push(`| **Total** | **${formatBytes(baseAssetSize)}** | **${formatBytes(prAssetSize)}** | **${diff.prGzipSize ? formatBytes(diff.prGzipSize) : '-'}** | **${renderSizeChange(totalAssetDiff, formatBytes(totalAssetDiff, { signed: true }))}** | |`);
+      lines.push(`| **Total** | **${formatBytes(baseAssetSize)}** | **${formatBytes(prAssetSize)}** | **${renderSizeChange(totalAssetDiff, formatBytes(totalAssetDiff, { signed: true }))}** | |`);
     }
 
     lines.push('');
@@ -106,8 +107,8 @@ function generateComment(analysis, options = {}) {
     lines.push('<details>');
     lines.push('<summary><b>🚪 Entrypoint Changes</b></summary>');
     lines.push('');
-    lines.push('| Entrypoint | Base | PR | Gzip | Change | Top Contributors |');
-    lines.push('|------------|------|-----|------|--------|-----------------|');
+    lines.push('| Entrypoint | Base | PR | Change | Top Contributors |');
+    lines.push('|------------|------|-----|--------|------------------|');
 
     for (const ep of significantEntrypoints) {
       const baseSizeStr = ep.baseSize > 0 ? formatBytes(ep.baseSize) : '-';
@@ -121,8 +122,7 @@ function generateComment(analysis, options = {}) {
         changeStr = renderSizeChange(ep.change, formatBytes(ep.change, { signed: true }));
       }
       const reasonsStr = formatAssetReasons(ep);
-      const gzipStr = ep.prGzip > 0 ? formatBytes(ep.prGzip) : '-';
-      lines.push(`| \`${ep.name}\` | ${baseSizeStr} | ${prSizeStr} | ${gzipStr} | ${changeStr} | ${reasonsStr} |`);
+      lines.push(`| \`${ep.name}\` | ${baseSizeStr} | ${prSizeStr} | ${changeStr} | ${reasonsStr} |`);
     }
 
     lines.push('');
@@ -464,9 +464,19 @@ function formatAssetReasons(asset) {
   const reasons = asset.reasons || [];
   if (reasons.length === 0) return '-';
 
-  return reasons
-    .map(r => `\`${truncate(r.name, 25)}\` (${r.changeFormatted})`)
+  const parts = reasons
+    .map(r => `\`${r.name}\` (${r.changeFormatted})`)
     .join(', ');
+
+  // Add "... and N others" summary when there are hidden contributors
+  const meta = asset.reasonsMeta;
+  if (meta && meta.totalCount > reasons.length) {
+    const othersCount = meta.totalCount - reasons.length;
+    const netStr = formatBytes(meta.netChange, { signed: true });
+    return `${parts}, … and ${othersCount} others (net ${netStr})`;
+  }
+
+  return parts;
 }
 
 /**

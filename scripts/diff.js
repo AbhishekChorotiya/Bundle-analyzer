@@ -58,9 +58,9 @@ function generateReport(diff, summary, options = {}) {
 
   // Summary section
   lines.push('## Summary');
-  lines.push(`Base Size:  ${diff.baseSizeFormatted}`);
-  lines.push(`PR Size:    ${diff.prSizeFormatted}`);
-  lines.push(`Change:     ${diff.totalDiffFormatted}`);
+  lines.push(`Base Size:  ${diff.baseAssetSizeFormatted || '0 B'}`);
+  lines.push(`PR Size:    ${diff.prAssetSizeFormatted || '0 B'}`);
+  lines.push(`Change:     ${formatBytes(diff.totalAssetDiff || 0, { signed: true })}`);
   lines.push(`node_modules: ${diff.nodeModulesDiff >= 0 ? '+' : ''}${formatBytes(diff.nodeModulesDiff, { signed: true })}`);
   lines.push('');
 
@@ -247,15 +247,12 @@ function generateReport(diff, summary, options = {}) {
 function generateJSONReport(diff, summary) {
   return {
     summary: {
-      baseSize: diff.baseSize,
-      prSize: diff.prSize,
-      totalDiff: diff.totalDiff,
-      totalDiffFormatted: diff.totalDiffFormatted,
+      baseSize: diff.baseAssetSize || 0,
+      prSize: diff.prAssetSize || 0,
+      totalDiff: diff.totalAssetDiff || 0,
+      totalDiffFormatted: formatBytes(diff.totalAssetDiff || 0, { signed: true }),
       nodeModulesDiff: diff.nodeModulesDiff,
       hasSignificantChanges: summary.isSignificant,
-      baseAssetSize: diff.baseAssetSize || 0,
-      prAssetSize: diff.prAssetSize || 0,
-      totalAssetDiff: diff.totalAssetDiff || 0,
     },
     assets: (diff.assetDiff || []).map(a => ({
       name: a.name,
@@ -315,9 +312,19 @@ function formatAssetReasonsText(asset) {
   const reasons = asset.reasons || [];
   if (reasons.length === 0) return null;
 
-  return reasons
+  const parts = reasons
     .map(r => `${r.name} (${r.changeFormatted})`)
     .join(', ');
+
+  // Add "... and N others" summary when there are hidden contributors
+  const meta = asset.reasonsMeta;
+  if (meta && meta.totalCount > reasons.length) {
+    const othersCount = meta.totalCount - reasons.length;
+    const netStr = formatBytes(meta.netChange, { signed: true });
+    return `${parts}, ... and ${othersCount} others (net ${netStr} pre-minify)`;
+  }
+
+  return parts;
 }
 
 /**
