@@ -7,6 +7,7 @@
 const { execSync, spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const { validateGitRef } = require('../lib/utils');
 
 /**
  * Build webpack stats for current project
@@ -166,6 +167,7 @@ function getWebpackCommand() {
  * @returns {Promise<string>} Path to generated stats file
  */
 async function buildStatsForRef(ref, options = {}) {
+  validateGitRef(ref);
   const tempDir = path.join(process.cwd(), '.bundle-ai-cache');
   if (!fs.existsSync(tempDir)) {
     fs.mkdirSync(tempDir, { recursive: true });
@@ -216,6 +218,7 @@ async function buildStatsForRef(ref, options = {}) {
   } finally {
     // Restore original state
     if (currentBranch) {
+      validateGitRef(currentBranch);
       execSync(`git checkout ${currentBranch}`, { cwd: process.cwd(), stdio: 'ignore' });
     }
 

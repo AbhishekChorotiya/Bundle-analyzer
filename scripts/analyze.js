@@ -23,7 +23,7 @@ const { runDiff } = require('./diff');
  */
 function computeAnalysisInputs(baseStatsPath, prStatsPath, options = {}) {
   const { diff, summary, baseStats, prStats } = runDiff(baseStatsPath, prStatsPath, { ...options, silent: true });
-  const detections = runDetection(diff, { baseStats: diff.baseStats });
+  const detections = runDetection(diff, { baseStats });
   return { diff, summary, detections, baseStats, prStats };
 }
 
@@ -48,7 +48,7 @@ async function runAnalysis(baseStatsPath, prStatsPath, context = {}, options = {
 
   // Step 2: Run rule detection
   log('Step 2: Running detection rules...');
-  const detections = runDetection(diff, { baseStats: diff.baseStats });
+  const detections = runDetection(diff, { baseStats });
   log(`  ✓ ${detections.violations.length} issues detected`);
   log(`    - Critical: ${detections.critical.length}`);
   log(`    - Warnings: ${detections.warnings.length}`);
@@ -110,13 +110,13 @@ function generateAnalysisReport(diff, detections, aiResult, context) {
   // Summary Section
   lines.push('📊 SUMMARY');
   lines.push('─'.repeat(60));
-  lines.push(`Base Branch Size:  ${diff.baseSizeFormatted}`);
-  lines.push(`PR Branch Size:    ${diff.prSizeFormatted}`);
-  lines.push(`Total Change:      ${diff.totalDiffFormatted}`);
+  lines.push(`Base Branch Size:  ${diff.baseAssetSizeFormatted || '0 B'}`);
+  lines.push(`PR Branch Size:    ${diff.prAssetSizeFormatted || '0 B'}`);
+  lines.push(`Total Change:      ${formatBytes(diff.totalAssetDiff || 0, { signed: true })}`);
 
-  if (diff.baseSize > 0) {
-    const percent = ((diff.totalDiff / diff.baseSize) * 100).toFixed(1);
-    const sign = diff.totalDiff >= 0 ? '+' : '';
+  if ((diff.baseAssetSize || 0) > 0) {
+    const percent = (((diff.totalAssetDiff || 0) / diff.baseAssetSize) * 100).toFixed(1);
+    const sign = (diff.totalAssetDiff || 0) >= 0 ? '+' : '';
     lines.push(`Percentage:        ${sign}${percent}%`);
   }
 
@@ -331,10 +331,10 @@ function generateJSONOutput(analysis) {
 
   return {
     summary: {
-      baseSize: diff.baseSize,
-      prSize: diff.prSize,
-      totalDiff: diff.totalDiff,
-      totalDiffFormatted: diff.totalDiffFormatted,
+      baseSize: diff.baseAssetSize || 0,
+      prSize: diff.prAssetSize || 0,
+      totalDiff: diff.totalAssetDiff || 0,
+      totalDiffFormatted: formatBytes(diff.totalAssetDiff || 0, { signed: true }),
       nodeModulesDiff: diff.nodeModulesDiff,
     },
     aiAnalysis: {
